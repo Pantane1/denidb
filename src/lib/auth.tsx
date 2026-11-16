@@ -27,27 +27,13 @@ interface AuthContextValue {
   signIn: (email: string, password: string) => Promise<AuthResult>;
   signUp: (email: string, password: string, shopName: string) => Promise<AuthResult>;
   signOut: () => Promise<void>;
-  updateProfile: (patch: Partial<Pick<UserProfile, 'shop_name' | 'currency' | 'country_code'>>) => Promise<void>;
+  updateProfile: (
+    patch: Partial<Pick<UserProfile, 'shop_name' | 'currency' | 'country_code' | 'whatsapp_template'>>
+  ) => Promise<{ error?: string }>;
   refreshProfile: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
-
-export function clearTenantStorageCache(userId: string): void {
-  try {
-    const prefix = `denibook_v2_${userId}_`;
-    const toRemove: string[] = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (k && k.startsWith(prefix)) {
-        toRemove.push(k);
-      }
-    }
-    toRemove.forEach((k) => localStorage.removeItem(k));
-  } catch {
-    // ignore storage errors
-  }
-}
 
 function readLocalAccounts(): LocalAccountRecord[] {
   try {
@@ -68,15 +54,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
-  const loadSupabaseProfile = useCallback(async (activeSession: Session) => {
+  const fetchSupabaseProfile = useCallback(async (uid: string, fallbackShop = 'My Shop') => {
     if (!supabase) return;
-    const uid = activeSession.user.id;
-    const fallbackShop =
-      (activeSession.user.user_metadata?.shop_name as string | undefined)?.trim() || 'My Shop';
 
     const { data, error } = await supabase
       .from('profiles')
-      .select('id, shop_name, currency, country_code')
+      .select('id, shop_name, currency, country_code, whatsapp_template')
       .eq('id', uid)
       .maybeSingle();
 
@@ -85,11 +68,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
 
-    // If profile row does not exist yet, upsert one cleanly for this user
+    // Create missing profile row if trigger had not yet populated it
     const { data: upserted } = await supabase
       .from('profiles')
       .upsert({ id: uid, shop_name: fallbackShop })
-      .select('id, shop_name, currency, country_code')
+      .select('id, shop_name, currency, country_code, whatsapp_template')
       .maybeSingle();
 
     setProfile(
@@ -115,7 +98,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             id: currentSession.user.id,
             email: currentSession.user.email || '',
           });
-          await loadSupabaseProfile(currentSession);
         } else {
           setUser(null);
           setProfile(null);
@@ -125,7 +107,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       const {
         data: { subscription },
-      } = supabase.auth.onAuthStateChange(async (_event, nextSession) => {
+      } = supabase.auth.onAuthStateChange((_event, nextSession) => {
         if (!mounted) return;
         setSession(nextSession);
         if (nextSession) {
@@ -133,7 +115,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             id: nextSession.user.id,
             email: nextSession.user.email || '',
           });
-          await loadSupabaseProfile(nextSession);
         } else {
           setUser(null);
           setProfile(null);
@@ -147,7 +128,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       };
     }
 
-    // Local multi-tenant auth fallback when Supabase env vars are not set
+    // Fallback ONLY when Supabase env vars are not configured
     try {
       const savedUserId = localStorage.getItem(LOCAL_SESSION_KEY);
       if (savedUserId) {
@@ -170,47 +151,50 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => {
       mounted = false;
     };
-  }, [loadSupabaseProfile]);
+  }, []);
 
-  const signIn = useCallback(
-    async (email: string, password: string): Promise<AuthResult> => {
-      const cleanEmail = email.trim().toLowerCase();
-      if (isSupabaseConfigured && supabase) {
-        const { data, error } = await supabase.auth.signInWithPassword({
-          email: cleanEmail,
-          password,
-        });
-        if (error) {
-          return { error: error.message };
-        }
-        if (data.session) {
-          setSession(data.session);
-          setUser({ id: data.session.user.id, email: data.session.user.email || cleanEmail });
-          await loadSupabaseProfile(data.session);
-        }
-        return {};
-      }
+  // Fetch profile from Supabase whenever authenticated user?.id changes
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase || !user?.id) return;
+    const fallbackShop =
+      (session?.user.user_metadata?.shop_name as string | undefined)?.trim() || 'My Shop';
+    void fetchSupabaseProfile(user.id, fallbackShop);
+  }, [fetchSupabaseProfile, session?.user.user_metadata?.shop_name, user?.id]);
 
-      // Local fallback sign-in
-      const accounts = readLocalAccounts();
-      const matched = accounts.find(
-        (a) => a.email.toLowerCase() === cleanEmail && a.password === password
-      );
-      if (!matched) {
-        return { error: 'Invalid email or password.' };
-      }
-      localStorage.setItem(LOCAL_SESSION_KEY, matched.id);
-      setUser({ id: matched.id, email: matched.email });
-      setProfile({
-        id: matched.id,
-        shop_name: matched.shop_name,
-        currency: 'KES',
-        country_code: '254',
+  const signIn = useCallback(async (email: string, password: string): Promise<AuthResult> => {
+    const cleanEmail = email.trim().toLowerCase();
+    if (isSupabaseConfigured && supabase) {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: cleanEmail,
+        password,
       });
+      if (error) {
+        return { error: error.message };
+      }
+      if (data.session) {
+        setSession(data.session);
+        setUser({ id: data.session.user.id, email: data.session.user.email || cleanEmail });
+      }
       return {};
-    },
-    [loadSupabaseProfile]
-  );
+    }
+
+    const accounts = readLocalAccounts();
+    const matched = accounts.find(
+      (a) => a.email.toLowerCase() === cleanEmail && a.password === password
+    );
+    if (!matched) {
+      return { error: 'Invalid email or password.' };
+    }
+    localStorage.setItem(LOCAL_SESSION_KEY, matched.id);
+    setUser({ id: matched.id, email: matched.email });
+    setProfile({
+      id: matched.id,
+      shop_name: matched.shop_name,
+      currency: 'KES',
+      country_code: '254',
+    });
+    return {};
+  }, []);
 
   const signUp = useCallback(
     async (email: string, password: string, shopName: string): Promise<AuthResult> => {
@@ -233,13 +217,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (data.session) {
           setSession(data.session);
           setUser({ id: data.session.user.id, email: data.session.user.email || cleanEmail });
-          await loadSupabaseProfile(data.session);
           return {};
         }
         return { needsEmailConfirmation: true };
       }
 
-      // Local fallback sign-up
       const accounts = readLocalAccounts();
       if (accounts.some((a) => a.email.toLowerCase() === cleanEmail)) {
         return { error: 'An account with this email already exists.' };
@@ -265,51 +247,67 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
       return {};
     },
-    [loadSupabaseProfile]
+    []
   );
 
   const signOut = useCallback(async () => {
-    const activeUserId = user?.id;
-    if (activeUserId) {
-      clearTenantStorageCache(activeUserId);
-    }
-
     if (isSupabaseConfigured && supabase) {
       await supabase.auth.signOut();
     } else {
       localStorage.removeItem(LOCAL_SESSION_KEY);
     }
-
+    // Only clear in-memory session/user/profile state — NEVER delete DB records
     setSession(null);
     setUser(null);
     setProfile(null);
-  }, [user?.id]);
+  }, []);
 
   const updateProfile = useCallback(
-    async (patch: Partial<Pick<UserProfile, 'shop_name' | 'currency' | 'country_code'>>) => {
-      if (!user) return;
-      setProfile((prev) => (prev ? { ...prev, ...patch } : prev));
+    async (
+      patch: Partial<Pick<UserProfile, 'shop_name' | 'currency' | 'country_code' | 'whatsapp_template'>>
+    ): Promise<{ error?: string }> => {
+      if (!user) return { error: 'Not authenticated' };
 
       if (isSupabaseConfigured && supabase) {
-        await supabase
+        const { data: { user: authUser }, error: authError } = await supabase.auth.getUser();
+        if (authError || !authUser) {
+          return { error: authError?.message || 'Session expired. Please sign in again.' };
+        }
+
+        const { data, error } = await supabase
           .from('profiles')
-          .update({ ...patch, updated_at: new Date().toISOString() })
-          .eq('id', user.id);
-      } else if (patch.shop_name) {
+          .upsert({
+            id: authUser.id,
+            ...patch,
+            updated_at: new Date().toISOString(),
+          })
+          .select('id, shop_name, currency, country_code, whatsapp_template')
+          .single();
+
+        if (error) {
+          return { error: error.message };
+        }
+        setProfile(data as UserProfile);
+        return {};
+      }
+
+      setProfile((prev) => (prev ? { ...prev, ...patch } : prev));
+      if (patch.shop_name) {
         const accounts = readLocalAccounts();
         writeLocalAccounts(
           accounts.map((a) => (a.id === user.id ? { ...a, shop_name: patch.shop_name! } : a))
         );
       }
+      return {};
     },
     [user]
   );
 
   const refreshProfile = useCallback(async () => {
-    if (isSupabaseConfigured && session) {
-      await loadSupabaseProfile(session);
+    if (isSupabaseConfigured && user?.id) {
+      await fetchSupabaseProfile(user.id);
     }
-  }, [loadSupabaseProfile, session]);
+  }, [fetchSupabaseProfile, user?.id]);
 
   return (
     <AuthContext.Provider

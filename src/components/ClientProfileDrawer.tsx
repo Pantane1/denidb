@@ -326,10 +326,10 @@ export const ClientProfileDrawer: React.FC<ClientProfileDrawerProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  deleteClient(client.id);
+                onClick={async () => {
+                  const ok = await deleteClient(client.id);
                   setConfirmDeleteClient(false);
-                  onClose();
+                  if (ok) onClose();
                 }}
                 className="flex-1 min-h-[44px] rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-sm font-semibold"
               >

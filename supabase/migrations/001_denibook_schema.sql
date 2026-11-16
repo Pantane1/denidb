@@ -10,14 +10,18 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   shop_name TEXT NOT NULL DEFAULT 'My Shop' CHECK (char_length(trim(shop_name)) > 0),
   currency TEXT NOT NULL DEFAULT 'KES',
   country_code TEXT NOT NULL DEFAULT '254',
+  whatsapp_template TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- 3. Core Multi-Tenant Ledger Tables (owner_id defaults to auth.uid())
+ALTER TABLE public.profiles
+  ADD COLUMN IF NOT EXISTS whatsapp_template TEXT;
+
+-- 3. Core Multi-Tenant Ledger Tables (user_id defaults to auth.uid())
 CREATE TABLE IF NOT EXISTS public.clients (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  owner_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE DEFAULT auth.uid(),
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE DEFAULT auth.uid(),
   name TEXT NOT NULL CHECK (char_length(trim(name)) > 0),
   whatsapp_number TEXT NOT NULL CHECK (char_length(trim(whatsapp_number)) > 0),
   total_balance NUMERIC(12, 2) NOT NULL DEFAULT 0,
@@ -27,7 +31,7 @@ CREATE TABLE IF NOT EXISTS public.clients (
 
 CREATE TABLE IF NOT EXISTS public.products (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  owner_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE DEFAULT auth.uid(),
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE DEFAULT auth.uid(),
   name TEXT NOT NULL CHECK (char_length(trim(name)) > 0),
   unit_price NUMERIC(12, 2) NOT NULL CHECK (unit_price >= 0),
   is_default BOOLEAN NOT NULL DEFAULT false,
@@ -36,7 +40,7 @@ CREATE TABLE IF NOT EXISTS public.products (
 
 CREATE TABLE IF NOT EXISTS public.transactions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  owner_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE DEFAULT auth.uid(),
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE DEFAULT auth.uid(),
   client_id UUID NOT NULL REFERENCES public.clients(id) ON DELETE CASCADE,
   type TEXT NOT NULL CHECK (type IN ('DEBT', 'PAYMENT')),
   product_name TEXT NOT NULL,
@@ -47,14 +51,52 @@ CREATE TABLE IF NOT EXISTS public.transactions (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Remove any legacy unowned seed rows if upgrading from an earlier schema
-DELETE FROM public.products WHERE owner_id IS NULL;
+-- Safe upgrade if earlier migration created owner_id instead of user_id
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'clients' AND column_name = 'owner_id'
+  ) AND NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'clients' AND column_name = 'user_id'
+  ) THEN
+    ALTER TABLE public.clients RENAME COLUMN owner_id TO user_id;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'products' AND column_name = 'owner_id'
+  ) AND NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'products' AND column_name = 'user_id'
+  ) THEN
+    ALTER TABLE public.products RENAME COLUMN owner_id TO user_id;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'transactions' AND column_name = 'owner_id'
+  ) AND NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'transactions' AND column_name = 'user_id'
+  ) THEN
+    ALTER TABLE public.transactions RENAME COLUMN owner_id TO user_id;
+  END IF;
+END $$;
+
+-- Clean up any legacy unowned rows before enforcing defaults
+DELETE FROM public.products WHERE user_id IS NULL;
 
 -- 4. Indexes for fast mobile queries
-CREATE INDEX IF NOT EXISTS idx_clients_owner_balance ON public.clients (owner_id, total_balance DESC);
+DROP INDEX IF EXISTS idx_clients_owner_balance;
+DROP INDEX IF EXISTS idx_products_owner;
+DROP INDEX IF EXISTS idx_transactions_owner_created;
+
+CREATE INDEX IF NOT EXISTS idx_clients_user_balance ON public.clients (user_id, total_balance DESC);
 CREATE INDEX IF NOT EXISTS idx_clients_name ON public.clients (name);
-CREATE INDEX IF NOT EXISTS idx_products_owner ON public.products (owner_id, created_at ASC);
-CREATE INDEX IF NOT EXISTS idx_transactions_owner_created ON public.transactions (owner_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_products_user ON public.products (user_id, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_transactions_user_created ON public.transactions (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_transactions_client_created ON public.transactions (client_id, created_at DESC);
 
 -- 5. Auto-provision Profile & Default Product ("Fert" @ 50) on User Sign Up
@@ -78,10 +120,10 @@ BEGIN
     SET shop_name = EXCLUDED.shop_name,
         updated_at = now();
 
-  INSERT INTO public.products (owner_id, name, unit_price, is_default)
+  INSERT INTO public.products (user_id, name, unit_price, is_default)
   SELECT NEW.id, 'Fert', 50, true
   WHERE NOT EXISTS (
-    SELECT 1 FROM public.products WHERE owner_id = NEW.id
+    SELECT 1 FROM public.products WHERE user_id = NEW.id
   );
 
   RETURN NEW;
@@ -188,7 +230,7 @@ BEGIN
     END IF;
 
     INSERT INTO public.transactions (
-      owner_id,
+      user_id,
       client_id,
       type,
       product_name,
@@ -233,21 +275,21 @@ CREATE POLICY "Owner manages clients"
 ON public.clients
 FOR ALL
 TO authenticated
-USING (owner_id = auth.uid())
-WITH CHECK (owner_id = auth.uid());
+USING (user_id = auth.uid())
+WITH CHECK (user_id = auth.uid());
 
 DROP POLICY IF EXISTS "Owner manages products" ON public.products;
 CREATE POLICY "Owner manages products"
 ON public.products
 FOR ALL
 TO authenticated
-USING (owner_id = auth.uid())
-WITH CHECK (owner_id = auth.uid());
+USING (user_id = auth.uid())
+WITH CHECK (user_id = auth.uid());
 
 DROP POLICY IF EXISTS "Owner manages transactions" ON public.transactions;
 CREATE POLICY "Owner manages transactions"
 ON public.transactions
 FOR ALL
 TO authenticated
-USING (owner_id = auth.uid())
-WITH CHECK (owner_id = auth.uid());
+USING (user_id = auth.uid())
+WITH CHECK (user_id = auth.uid());

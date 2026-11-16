@@ -19,12 +19,14 @@ export const AddClientModal: React.FC<AddClientModalProps> = ({
   const [name, setName] = useState(existingClient?.name ?? '');
   const [phone, setPhone] = useState(existingClient?.whatsapp_number ?? '');
   const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
   const sanitized = sanitizeWhatsAppNumber(phone, settings.countryCode);
   const validPhone = isValidWhatsAppNumber(phone, settings.countryCode);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting) return;
     if (!name.trim()) {
       setError('Please enter the customer name.');
       return;
@@ -34,13 +36,20 @@ export const AddClientModal: React.FC<AddClientModalProps> = ({
       return;
     }
 
-    if (existingClient) {
-      updateClient(existingClient.id, name, phone);
-      onClose();
-    } else {
-      const created = addClient(name, phone);
-      onSaved?.(created);
-      onClose();
+    setSubmitting(true);
+    try {
+      if (existingClient) {
+        const ok = await updateClient(existingClient.id, name, phone);
+        if (ok) onClose();
+      } else {
+        const created = await addClient(name, phone);
+        if (created) {
+          onSaved?.(created);
+          onClose();
+        }
+      }
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -143,9 +152,10 @@ export const AddClientModal: React.FC<AddClientModalProps> = ({
             </button>
             <button
               type="submit"
-              className="flex-1 min-h-[48px] rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-sm font-semibold active:scale-[0.98] transition-all"
+              disabled={submitting}
+              className="flex-1 min-h-[48px] rounded-xl bg-teal-700 hover:bg-teal-800 disabled:opacity-50 text-white text-sm font-semibold active:scale-[0.98] transition-all"
             >
-              {existingClient ? 'Save Changes' : 'Save Client'}
+              {submitting ? 'Saving...' : existingClient ? 'Save Changes' : 'Save Client'}
             </button>
           </div>
         </form>

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Check,
   Cloud,
@@ -49,32 +49,40 @@ export const ProductSettings: React.FC = () => {
   const [shopNameDraft, setShopNameDraft] = useState(profile?.shop_name || settings.shopName);
   const [confirmAction, setConfirmAction] = useState<'reset' | 'clear' | null>(null);
 
-  const handleAddProduct = (e: React.FormEvent) => {
+  useEffect(() => {
+    if (profile?.shop_name) {
+      setShopNameDraft(profile.shop_name);
+    }
+  }, [profile?.shop_name]);
+
+  const handleAddProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     const price = Number(newPrice);
     if (!newName.trim() || Number.isNaN(price) || price < 0) {
       pushToast('Enter a valid item name and price', 'error');
       return;
     }
-    upsertProduct({
+    const ok = await upsertProduct({
       name: newName.trim(),
       unit_price: price,
       is_default: products.length === 0,
     });
-    setNewName('');
-    setNewPrice('');
+    if (ok) {
+      setNewName('');
+      setNewPrice('');
+    }
   };
 
-  const handleSaveEdit = (id: string, isDefault: boolean) => {
+  const handleSaveEdit = async (id: string, isDefault: boolean) => {
     const price = Number(editPrice);
     if (!editName.trim() || Number.isNaN(price) || price < 0) return;
-    upsertProduct({
+    const ok = await upsertProduct({
       id,
       name: editName.trim(),
       unit_price: price,
       is_default: isDefault,
     });
-    setEditingId(null);
+    if (ok) setEditingId(null);
   };
 
   const handleSavePin = () => {
@@ -82,16 +90,16 @@ export const ProductSettings: React.FC = () => {
       pushToast('PIN must be exactly 4 digits', 'error');
       return;
     }
-    updateSettings({ pinCode: pinDraft });
+    void updateSettings({ pinCode: pinDraft });
     pushToast('Owner PIN updated');
   };
 
-  const handleSaveShopName = () => {
+  const handleSaveShopName = async () => {
     if (!shopNameDraft.trim()) {
       pushToast('Shop name cannot be empty', 'error');
       return;
     }
-    updateSettings({ shopName: shopNameDraft.trim() });
+    await updateSettings({ shopName: shopNameDraft.trim() });
     pushToast('Shop name updated');
   };
 

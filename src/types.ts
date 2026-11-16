@@ -13,10 +13,12 @@ export interface UserProfile {
   shop_name: string;
   currency: string;
   country_code: string;
+  whatsapp_template?: string | null;
 }
 
 export interface Client {
   id: string;
+  user_id?: string;
   name: string;
   whatsapp_number: string;
   total_balance: number;
@@ -26,6 +28,7 @@ export interface Client {
 
 export interface Product {
   id: string;
+  user_id?: string;
   name: string;
   unit_price: number;
   is_default: boolean;
@@ -33,6 +36,7 @@ export interface Product {
 
 export interface LedgerTransaction {
   id: string;
+  user_id?: string;
   client_id: string;
   type: TransactionType;
   product_name: string;

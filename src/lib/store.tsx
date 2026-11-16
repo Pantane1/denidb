@@ -3,7 +3,6 @@ import {
   AppSettings,
   Client,
   LedgerTransaction,
-  PendingSyncOp,
   Product,
   ToastItem,
   TransactionType,
@@ -14,17 +13,7 @@ import { DEFAULT_WHATSAPP_TEMPLATE, sanitizeWhatsAppNumber } from './phone';
 import { isSupabaseConfigured, supabase } from './supabase';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 
-function tenantKeys(userId: string) {
-  const prefix = `denibook_v2_${userId}_`;
-  return {
-    clients: `${prefix}clients`,
-    products: `${prefix}products`,
-    transactions: `${prefix}transactions`,
-    settings: `${prefix}settings`,
-    pending: `${prefix}pending`,
-    initialized: `${prefix}initialized`,
-  };
-}
+const THEME_PREF_KEY = 'denibook_ui_theme_v1';
 
 const DEFAULT_SETTINGS: AppSettings = {
   shopName: 'My Shop',
@@ -200,15 +189,6 @@ function recomputeBalances(clients: Client[], transactions: LedgerTransaction[])
   });
 }
 
-function readJson<T>(key: string, fallback: T): T {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? (JSON.parse(raw) as T) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
 export function triggerHaptic(ms = 12): void {
   if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
     navigator.vibrate(ms);
@@ -233,12 +213,12 @@ interface DeniBookContextValue {
   };
   unlockWithPin: (pin: string) => boolean;
   lockApp: () => void;
-  updateSettings: (patch: Partial<AppSettings>) => void;
+  updateSettings: (patch: Partial<AppSettings>) => Promise<void>;
   pushToast: (message: string, tone?: ToastItem['tone']) => void;
   dismissToast: (id: string) => void;
-  addClient: (name: string, phone: string) => Client;
-  updateClient: (id: string, name: string, phone: string) => void;
-  deleteClient: (id: string) => void;
+  addClient: (name: string, phone: string) => Promise<Client | null>;
+  updateClient: (id: string, name: string, phone: string) => Promise<boolean>;
+  deleteClient: (id: string) => Promise<boolean>;
   saveDebtSale: (params: {
     clientIds: string[];
     productName: string;
@@ -247,19 +227,19 @@ interface DeniBookContextValue {
     discountAmount?: number;
     depositAmount?: number;
     note?: string;
-  }) => Promise<void>;
+  }) => Promise<boolean>;
   recordPayment: (params: {
     clientId: string;
     amount: number;
     note?: string;
-  }) => Promise<void>;
-  voidTransaction: (txId: string) => Promise<void>;
-  upsertProduct: (product: Omit<Product, 'id'> & { id?: string }) => void;
-  deleteProduct: (productId: string) => void;
-  setDefaultProduct: (productId: string) => void;
+  }) => Promise<boolean>;
+  voidTransaction: (txId: string) => Promise<boolean>;
+  upsertProduct: (product: Omit<Product, 'id'> & { id?: string }) => Promise<boolean>;
+  deleteProduct: (productId: string) => Promise<boolean>;
+  setDefaultProduct: (productId: string) => Promise<boolean>;
   exportCsv: () => void;
-  resetDemoData: () => void;
-  clearAllRecords: () => void;
+  resetDemoData: () => Promise<void>;
+  clearAllRecords: () => Promise<void>;
   syncNow: () => Promise<void>;
   logoutAndClear: () => Promise<void>;
 }
@@ -267,24 +247,26 @@ interface DeniBookContextValue {
 const DeniBookContext = createContext<DeniBookContextValue | null>(null);
 
 export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { user, session, profile, signOut, updateProfile } = useAuth();
+  const { user, profile, signOut, updateProfile, refreshProfile } = useAuth();
   const isOnline = useOnlineStatus();
 
   if (!user) {
     throw new Error('DeniBookProvider requires an authenticated user');
   }
 
-  const keys = useMemo(() => tenantKeys(user.id), [user.id]);
+  const [settings, setSettings] = useState<AppSettings>(() => {
+    const savedTheme = localStorage.getItem(THEME_PREF_KEY) === 'dark' ? 'dark' : 'light';
+    return {
+      ...DEFAULT_SETTINGS,
+      shopName: profile?.shop_name || DEFAULT_SETTINGS.shopName,
+      currency: profile?.currency || DEFAULT_SETTINGS.currency,
+      countryCode: profile?.country_code || DEFAULT_SETTINGS.countryCode,
+      whatsappTemplate: profile?.whatsapp_template || DEFAULT_WHATSAPP_TEMPLATE,
+      theme: savedTheme,
+    };
+  });
 
-  const [settings, setSettings] = useState<AppSettings>(() => ({
-    ...DEFAULT_SETTINGS,
-    shopName: profile?.shop_name || DEFAULT_SETTINGS.shopName,
-    currency: profile?.currency || DEFAULT_SETTINGS.currency,
-    countryCode: profile?.country_code || DEFAULT_SETTINGS.countryCode,
-    ...readJson<Partial<AppSettings>>(keys.settings, {}),
-  }));
-
-  // Keep settings synced with profile metadata when loaded
+  // Sync settings whenever profile row arrives from Supabase
   useEffect(() => {
     if (!profile) return;
     setSettings((prev) => ({
@@ -292,50 +274,21 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       shopName: profile.shop_name || prev.shopName,
       currency: profile.currency || prev.currency,
       countryCode: profile.country_code || prev.countryCode,
+      whatsappTemplate: profile.whatsapp_template || prev.whatsappTemplate,
     }));
   }, [profile]);
 
-  const initialSeed = useMemo(() => {
-    const alreadyInit = localStorage.getItem(keys.initialized);
-    if (!alreadyInit) {
-      const defaultProducts: Product[] = [
-        { id: uuid(), name: 'Fert', unit_price: 50, is_default: true },
-      ];
-      localStorage.setItem(keys.clients, JSON.stringify([]));
-      localStorage.setItem(keys.products, JSON.stringify(defaultProducts));
-      localStorage.setItem(keys.transactions, JSON.stringify([]));
-      localStorage.setItem(keys.initialized, '1');
-      return { clients: [], products: defaultProducts, transactions: [] };
-    }
-    const savedClients = readJson<Client[]>(keys.clients, []);
-    const savedProducts = readJson<Product[]>(keys.products, [
-      { id: uuid(), name: 'Fert', unit_price: 50, is_default: true },
-    ]);
-    const savedTransactions = readJson<LedgerTransaction[]>(keys.transactions, []);
-    return {
-      clients: recomputeBalances(savedClients, savedTransactions),
-      products: savedProducts,
-      transactions: savedTransactions,
-    };
-  }, [keys]);
-
-  const [clients, setClients] = useState<Client[]>(initialSeed.clients);
-  const [products, setProducts] = useState<Product[]>(initialSeed.products);
-  const [transactions, setTransactions] = useState<LedgerTransaction[]>(initialSeed.transactions);
-  const [pendingOps, setPendingOps] = useState<PendingSyncOp[]>(() =>
-    readJson<PendingSyncOp[]>(keys.pending, [])
+  // Pure in-memory state hydrated directly from Supabase PostgreSQL
+  const [clients, setClients] = useState<Client[]>([]);
+  const [products, setProducts] = useState<Product[]>(
+    isSupabaseConfigured ? [] : [{ id: uuid(), name: 'Fert', unit_price: 50, is_default: true }]
   );
+  const [transactions, setTransactions] = useState<LedgerTransaction[]>([]);
   const [isSyncing, setIsSyncing] = useState(false);
-  const [isInitialLoading, setIsInitialLoading] = useState<boolean>(
-    Boolean(isSupabaseConfigured && session)
-  );
-  const [isLocked, setIsLocked] = useState<boolean>(() => {
-    const saved = readJson<Partial<AppSettings>>(keys.settings, {});
-    return Boolean(saved.pinEnabled);
-  });
+  const [isInitialLoading, setIsInitialLoading] = useState<boolean>(isSupabaseConfigured);
+  const [isLocked, setIsLocked] = useState<boolean>(false);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
-  const syncingRef = useRef(false);
-  const signingOutRef = useRef(false);
+  const fetchingRef = useRef(false);
 
   // Sync theme class on <html>
   useEffect(() => {
@@ -345,211 +298,118 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     } else {
       root.classList.remove('dark');
     }
+    localStorage.setItem(THEME_PREF_KEY, settings.theme);
   }, [settings.theme]);
-
-  // Persist tenant-isolated local cache (skipped during sign-out cleanup)
-  useEffect(() => {
-    if (!signingOutRef.current) {
-      localStorage.setItem(keys.clients, JSON.stringify(clients));
-    }
-  }, [clients, keys.clients]);
-
-  useEffect(() => {
-    if (!signingOutRef.current) {
-      localStorage.setItem(keys.products, JSON.stringify(products));
-    }
-  }, [products, keys.products]);
-
-  useEffect(() => {
-    if (!signingOutRef.current) {
-      localStorage.setItem(keys.transactions, JSON.stringify(transactions));
-    }
-  }, [transactions, keys.transactions]);
-
-  useEffect(() => {
-    if (!signingOutRef.current) {
-      localStorage.setItem(keys.settings, JSON.stringify(settings));
-    }
-  }, [settings, keys.settings]);
-
-  useEffect(() => {
-    if (!signingOutRef.current) {
-      localStorage.setItem(keys.pending, JSON.stringify(pendingOps));
-    }
-  }, [pendingOps, keys.pending]);
 
   const pushToast = useCallback((message: string, tone: ToastItem['tone'] = 'success') => {
     const id = uuid();
     setToasts((prev) => [...prev.slice(-2), { id, message, tone }]);
     window.setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 3200);
+    }, 3400);
   }, []);
 
   const dismissToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  const syncNow = useCallback(async () => {
-    if (!isSupabaseConfigured || !supabase || !session || !isOnline || syncingRef.current) {
+  const fetchAllFromSupabase = useCallback(async () => {
+    if (!isSupabaseConfigured || !supabase || !user?.id || fetchingRef.current) {
       setIsInitialLoading(false);
       return;
     }
-    syncingRef.current = true;
+
+    fetchingRef.current = true;
     setIsSyncing(true);
-    const ownerId = session.user.id;
     try {
-      const remaining: PendingSyncOp[] = [];
-      for (const op of pendingOps) {
-        try {
-          if (op.kind === 'ADD_CLIENT') {
-            const c = op.payload as Client;
-            const { error } = await supabase.from('clients').upsert({
-              id: c.id,
-              owner_id: ownerId,
-              name: c.name,
-              whatsapp_number: c.whatsapp_number,
-              created_at: c.created_at,
-            });
-            if (error) throw error;
-          } else if (op.kind === 'UPDATE_CLIENT') {
-            const c = op.payload as { id: string; name: string; whatsapp_number: string };
-            const { error } = await supabase
-              .from('clients')
-              .update({ name: c.name, whatsapp_number: c.whatsapp_number })
-              .eq('id', c.id)
-              .eq('owner_id', ownerId);
-            if (error) throw error;
-          } else if (op.kind === 'DELETE_CLIENT') {
-            const id = op.payload as string;
-            const { error } = await supabase
-              .from('clients')
-              .delete()
-              .eq('id', id)
-              .eq('owner_id', ownerId);
-            if (error) throw error;
-          } else if (op.kind === 'ADD_TRANSACTIONS') {
-            const txs = op.payload as LedgerTransaction[];
-            const { error } = await supabase.from('transactions').insert(
-              txs.map((t) => ({
-                id: t.id,
-                owner_id: ownerId,
-                client_id: t.client_id,
-                type: t.type,
-                product_name: t.product_name,
-                quantity: t.quantity,
-                split_count: t.split_count,
-                amount: t.amount,
-                note: t.note ?? null,
-                created_at: t.created_at,
-              }))
-            );
-            if (error) throw error;
-          } else if (op.kind === 'VOID_TRANSACTION') {
-            const id = op.payload as string;
-            const { error } = await supabase
-              .from('transactions')
-              .delete()
-              .eq('id', id)
-              .eq('owner_id', ownerId);
-            if (error) throw error;
-          } else if (op.kind === 'UPSERT_PRODUCT') {
-            const p = op.payload as Product;
-            const { error } = await supabase.from('products').upsert({
-              id: p.id,
-              owner_id: ownerId,
-              name: p.name,
-              unit_price: p.unit_price,
-              is_default: p.is_default,
-            });
-            if (error) throw error;
-          } else if (op.kind === 'DELETE_PRODUCT') {
-            const id = op.payload as string;
-            const { error } = await supabase
-              .from('products')
-              .delete()
-              .eq('id', id)
-              .eq('owner_id', ownerId);
-            if (error) throw error;
-          }
-        } catch {
-          remaining.push(op);
+      const { data: authData, error: authErr } = await supabase.auth.getUser();
+      if (authErr || !authData.user) {
+        return;
+      }
+      const uid = authData.user.id;
+
+      const [clientsRes, productsRes, txRes] = await Promise.all([
+        supabase
+          .from('clients')
+          .select('*')
+          .eq('user_id', uid)
+          .order('name', { ascending: true }),
+        supabase
+          .from('products')
+          .select('*')
+          .eq('user_id', uid)
+          .order('created_at', { ascending: true }),
+        supabase
+          .from('transactions')
+          .select('*')
+          .eq('user_id', uid)
+          .order('created_at', { ascending: false })
+          .limit(2000),
+      ]);
+
+      if (clientsRes.error) {
+        pushToast(`Failed to load clients: ${clientsRes.error.message}`, 'error');
+      } else {
+        setClients((clientsRes.data as Client[]) || []);
+      }
+
+      if (productsRes.error) {
+        pushToast(`Failed to load products: ${productsRes.error.message}`, 'error');
+      } else if (productsRes.data && productsRes.data.length > 0) {
+        setProducts(productsRes.data as Product[]);
+      } else {
+        // Ensure new account has default "Fert" @ 50 in Supabase
+        const { data: seeded, error: seedErr } = await supabase
+          .from('products')
+          .insert({
+            user_id: uid,
+            name: 'Fert',
+            unit_price: 50,
+            is_default: true,
+          })
+          .select('*');
+        if (seedErr) {
+          pushToast(`Failed to seed default item: ${seedErr.message}`, 'error');
+        } else if (seeded) {
+          setProducts(seeded as Product[]);
         }
       }
-      setPendingOps(remaining);
 
-      if (remaining.length === 0) {
-        const [clientsRes, productsRes, txRes] = await Promise.all([
-          supabase
-            .from('clients')
-            .select('*')
-            .eq('owner_id', ownerId)
-            .order('name', { ascending: true }),
-          supabase
-            .from('products')
-            .select('*')
-            .eq('owner_id', ownerId)
-            .order('created_at', { ascending: true }),
-          supabase
-            .from('transactions')
-            .select('*')
-            .eq('owner_id', ownerId)
-            .order('created_at', { ascending: false })
-            .limit(1000),
-        ]);
-
-        if (!clientsRes.error && clientsRes.data) {
-          setClients(clientsRes.data as Client[]);
-        }
-
-        if (!productsRes.error && productsRes.data) {
-          if (productsRes.data.length === 0) {
-            // Seed default "Fert" @ 50 for this user if trigger hadn't seeded yet
-            const fertId = uuid();
-            const { data: seeded } = await supabase
-              .from('products')
-              .insert({
-                id: fertId,
-                owner_id: ownerId,
-                name: 'Fert',
-                unit_price: 50,
-                is_default: true,
-              })
-              .select('*');
-            if (seeded && seeded.length > 0) {
-              setProducts(seeded as Product[]);
-            }
-          } else {
-            setProducts(productsRes.data as Product[]);
-          }
-        }
-
-        if (!txRes.error && txRes.data) {
-          setTransactions(txRes.data as LedgerTransaction[]);
-        }
+      if (txRes.error) {
+        pushToast(`Failed to load transactions: ${txRes.error.message}`, 'error');
+      } else {
+        setTransactions((txRes.data as LedgerTransaction[]) || []);
       }
+
+      await refreshProfile();
     } finally {
-      syncingRef.current = false;
+      fetchingRef.current = false;
       setIsSyncing(false);
       setIsInitialLoading(false);
     }
-  }, [isOnline, pendingOps, session]);
+  }, [pushToast, refreshProfile, user?.id]);
 
+  // Fetch user data on login & page reload tied to user?.id
   useEffect(() => {
-    if (isOnline && session) {
-      syncNow();
+    if (isSupabaseConfigured && user?.id) {
+      void fetchAllFromSupabase();
     } else {
       setIsInitialLoading(false);
     }
-  }, [isOnline, session, pendingOps.length, syncNow]);
+  }, [fetchAllFromSupabase, user?.id]);
 
-  const enqueueOp = useCallback((kind: PendingSyncOp['kind'], payload: unknown) => {
-    if (!isSupabaseConfigured) return;
-    setPendingOps((prev) => [
-      ...prev,
-      { id: uuid(), kind, payload, createdAt: new Date().toISOString() },
-    ]);
-  }, []);
+  const getAuthenticatedUserId = useCallback(async (): Promise<string | null> => {
+    if (!supabase) return null;
+    const {
+      data: { user: authUser },
+      error,
+    } = await supabase.auth.getUser();
+    if (error || !authUser) {
+      pushToast(error?.message || 'Session expired. Please sign in again.', 'error');
+      return null;
+    }
+    return authUser.id;
+  }, [pushToast]);
 
   const unlockWithPin = useCallback(
     (pin: string) => {
@@ -568,9 +428,14 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   }, []);
 
   const updateSettings = useCallback(
-    (patch: Partial<AppSettings>) => {
+    async (patch: Partial<AppSettings>) => {
       setSettings((prev) => ({ ...prev, ...patch }));
-      const profilePatch: Partial<{ shop_name: string; currency: string; country_code: string }> = {};
+      const profilePatch: Partial<{
+        shop_name: string;
+        currency: string;
+        country_code: string;
+        whatsapp_template: string;
+      }> = {};
       if (patch.shopName !== undefined && patch.shopName.trim()) {
         profilePatch.shop_name = patch.shopName.trim();
       }
@@ -580,61 +445,135 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       if (patch.countryCode !== undefined && patch.countryCode.trim()) {
         profilePatch.country_code = patch.countryCode.trim();
       }
+      if (patch.whatsappTemplate !== undefined) {
+        profilePatch.whatsapp_template = patch.whatsappTemplate;
+      }
       if (Object.keys(profilePatch).length > 0) {
-        void updateProfile(profilePatch);
+        const res = await updateProfile(profilePatch);
+        if (res.error) {
+          pushToast(`Failed to save profile settings: ${res.error}`, 'error');
+        }
       }
     },
-    [updateProfile]
+    [pushToast, updateProfile]
   );
 
   const addClient = useCallback(
-    (name: string, phone: string) => {
+    async (name: string, phone: string): Promise<Client | null> => {
+      const cleanName = name.trim();
+      const formattedPhone = sanitizeWhatsAppNumber(phone, settings.countryCode);
+
+      if (isSupabaseConfigured && supabase) {
+        const uid = await getAuthenticatedUserId();
+        if (!uid) return null;
+
+        const { data, error } = await supabase
+          .from('clients')
+          .insert({
+            user_id: uid,
+            name: cleanName,
+            whatsapp_number: formattedPhone,
+          })
+          .select('*')
+          .single();
+
+        if (error || !data) {
+          pushToast(`Could not add client: ${error?.message || 'Unknown error'}`, 'error');
+          return null;
+        }
+
+        const created = data as Client;
+        setClients((prev) => [created, ...prev]);
+        pushToast(`Added ${created.name}`);
+        return created;
+      }
+
       const now = new Date().toISOString();
-      const newClient: Client = {
+      const created: Client = {
         id: uuid(),
-        name: name.trim(),
-        whatsapp_number: sanitizeWhatsAppNumber(phone, settings.countryCode),
+        user_id: user.id,
+        name: cleanName,
+        whatsapp_number: formattedPhone,
         total_balance: 0,
         created_at: now,
         updated_at: now,
       };
-      setClients((prev) => [newClient, ...prev]);
-      enqueueOp('ADD_CLIENT', newClient);
-      pushToast(`Added ${newClient.name}`);
-      return newClient;
+      setClients((prev) => [created, ...prev]);
+      pushToast(`Added ${created.name}`);
+      return created;
     },
-    [enqueueOp, pushToast, settings.countryCode]
+    [getAuthenticatedUserId, pushToast, settings.countryCode, user.id]
   );
 
   const updateClient = useCallback(
-    (id: string, name: string, phone: string) => {
+    async (id: string, name: string, phone: string): Promise<boolean> => {
+      const cleanName = name.trim();
       const formatted = sanitizeWhatsAppNumber(phone, settings.countryCode);
+
+      if (isSupabaseConfigured && supabase) {
+        const uid = await getAuthenticatedUserId();
+        if (!uid) return false;
+
+        const { data, error } = await supabase
+          .from('clients')
+          .update({ name: cleanName, whatsapp_number: formatted })
+          .eq('id', id)
+          .eq('user_id', uid)
+          .select('*')
+          .single();
+
+        if (error || !data) {
+          pushToast(`Could not update client: ${error?.message || 'Unknown error'}`, 'error');
+          return false;
+        }
+
+        setClients((prev) => prev.map((c) => (c.id === id ? (data as Client) : c)));
+        pushToast('Client details updated');
+        return true;
+      }
+
       setClients((prev) =>
         prev.map((c) =>
           c.id === id
             ? {
                 ...c,
-                name: name.trim(),
+                name: cleanName,
                 whatsapp_number: formatted,
                 updated_at: new Date().toISOString(),
               }
             : c
         )
       );
-      enqueueOp('UPDATE_CLIENT', { id, name: name.trim(), whatsapp_number: formatted });
       pushToast('Client details updated');
+      return true;
     },
-    [enqueueOp, pushToast, settings.countryCode]
+    [getAuthenticatedUserId, pushToast, settings.countryCode]
   );
 
   const deleteClient = useCallback(
-    (id: string) => {
+    async (id: string): Promise<boolean> => {
+      if (isSupabaseConfigured && supabase) {
+        const uid = await getAuthenticatedUserId();
+        if (!uid) return false;
+
+        const { error } = await supabase
+          .from('clients')
+          .delete()
+          .eq('id', id)
+          .eq('user_id', uid);
+
+        if (error) {
+          pushToast(`Could not delete client: ${error.message}`, 'error');
+          return false;
+        }
+      }
+
       setClients((prev) => prev.filter((c) => c.id !== id));
       setTransactions((prev) => prev.filter((t) => t.client_id !== id));
-      enqueueOp('DELETE_CLIENT', id);
       pushToast('Client removed', 'info');
+      return true;
     },
-    [enqueueOp, pushToast]
+    [getAuthenticatedUserId, pushToast]
   );
 
   const saveDebtSale = useCallback(
@@ -654,12 +593,12 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       discountAmount?: number;
       depositAmount?: number;
       note?: string;
-    }) => {
-      if (clientIds.length === 0 || totalAmount <= 0) return;
+    }): Promise<boolean> => {
+      if (clientIds.length === 0 || totalAmount <= 0) return false;
 
       const discount = roundCurrency(Math.min(totalAmount, Math.max(0, discountAmount)));
       const netSale = roundCurrency(totalAmount - discount);
-      if (netSale <= 0) return;
+      if (netSale <= 0) return false;
 
       const deposit = roundCurrency(Math.min(netSale, Math.max(0, depositAmount)));
       const netDebtAdded = roundCurrency(netSale - deposit);
@@ -678,48 +617,108 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       if (note?.trim()) noteParts.push(note.trim());
       const combinedNote = noteParts.length > 0 ? noteParts.join(' · ') : undefined;
 
-      const debtTransactions: LedgerTransaction[] = clientIds.map((clientId, idx) => ({
-        id: uuid(),
-        client_id: clientId,
-        type: TransactionType.DEBT,
-        product_name: productName,
-        quantity,
-        split_count: splitCount,
-        amount: debtShares[idx],
-        note: combinedNote,
-        created_at: debtTime,
-        pending_sync: Boolean(isSupabaseConfigured),
-      }));
+      if (isSupabaseConfigured && supabase) {
+        const uid = await getAuthenticatedUserId();
+        if (!uid) return false;
 
-      const depositTransactions: LedgerTransaction[] =
-        deposit > 0
-          ? clientIds
-              .map((clientId, idx) => ({
-                id: uuid(),
-                client_id: clientId,
-                type: TransactionType.PAYMENT,
-                product_name: 'Deposit',
-                quantity: 1,
-                split_count: splitCount,
-                amount: depositShares[idx],
-                note: splitCount > 1 ? `Deposit at sale (Split ${splitCount} ways)` : 'Deposit at sale',
-                created_at: depositTime,
-                pending_sync: Boolean(isSupabaseConfigured),
-              }))
-              .filter((t) => t.amount > 0)
-          : [];
+        const rowsToInsert = [
+          ...clientIds.map((clientId, idx) => ({
+            user_id: uid,
+            client_id: clientId,
+            type: TransactionType.DEBT,
+            product_name: productName,
+            quantity,
+            split_count: splitCount,
+            amount: debtShares[idx],
+            note: combinedNote ?? null,
+            created_at: debtTime,
+          })),
+          ...(deposit > 0
+            ? clientIds
+                .map((clientId, idx) => ({
+                  user_id: uid,
+                  client_id: clientId,
+                  type: TransactionType.PAYMENT,
+                  product_name: 'Deposit',
+                  quantity: 1,
+                  split_count: splitCount,
+                  amount: depositShares[idx],
+                  note:
+                    splitCount > 1 ? `Deposit at sale (Split ${splitCount} ways)` : 'Deposit at sale',
+                  created_at: depositTime,
+                }))
+                .filter((r) => r.amount > 0)
+            : []),
+        ];
 
-      const allNewTransactions = [...depositTransactions, ...debtTransactions];
+        const { data: insertedTxs, error: insertError } = await supabase
+          .from('transactions')
+          .insert(rowsToInsert)
+          .select('*');
 
-      setTransactions((prevTx) => {
-        const nextTx = [...allNewTransactions, ...prevTx];
-        setClients((prevClients) => recomputeBalances(prevClients, nextTx));
-        return nextTx;
-      });
+        if (insertError) {
+          pushToast(`Failed to save sale: ${insertError.message}`, 'error');
+          return false;
+        }
 
-      enqueueOp('ADD_TRANSACTIONS', [...debtTransactions, ...depositTransactions]);
+        // Refresh updated client balances computed by DB trigger
+        const { data: refreshedClients } = await supabase
+          .from('clients')
+          .select('*')
+          .eq('user_id', uid)
+          .order('name', { ascending: true });
+
+        if (insertedTxs) {
+          setTransactions((prev) => [
+            ...(insertedTxs as LedgerTransaction[]).reverse(),
+            ...prev,
+          ]);
+        }
+        if (refreshedClients) {
+          setClients(refreshedClients as Client[]);
+        }
+      } else {
+        const debtTransactions: LedgerTransaction[] = clientIds.map((clientId, idx) => ({
+          id: uuid(),
+          user_id: user.id,
+          client_id: clientId,
+          type: TransactionType.DEBT,
+          product_name: productName,
+          quantity,
+          split_count: splitCount,
+          amount: debtShares[idx],
+          note: combinedNote,
+          created_at: debtTime,
+        }));
+
+        const depositTransactions: LedgerTransaction[] =
+          deposit > 0
+            ? clientIds
+                .map((clientId, idx) => ({
+                  id: uuid(),
+                  user_id: user.id,
+                  client_id: clientId,
+                  type: TransactionType.PAYMENT,
+                  product_name: 'Deposit',
+                  quantity: 1,
+                  split_count: splitCount,
+                  amount: depositShares[idx],
+                  note:
+                    splitCount > 1 ? `Deposit at sale (Split ${splitCount} ways)` : 'Deposit at sale',
+                  created_at: depositTime,
+                }))
+                .filter((t) => t.amount > 0)
+            : [];
+
+        const allNew = [...depositTransactions, ...debtTransactions];
+        setTransactions((prevTx) => {
+          const nextTx = [...allNew, ...prevTx];
+          setClients((prevClients) => recomputeBalances(prevClients, nextTx));
+          return nextTx;
+        });
+      }
+
       triggerHaptic(18);
-
       const names = clients
         .filter((c) => clientIds.includes(c.id))
         .map((c) => c.name.split(' ')[0]);
@@ -746,63 +745,212 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             : `Saved ${settings.currency} ${netSale} to ${nameSummary}`
         );
       }
+      return true;
     },
-    [clients, enqueueOp, pushToast, settings.currency]
+    [clients, getAuthenticatedUserId, pushToast, settings.currency, user.id]
   );
 
   const recordPayment = useCallback(
-    async ({ clientId, amount, note }: { clientId: string; amount: number; note?: string }) => {
-      if (amount <= 0) return;
+    async ({
+      clientId,
+      amount,
+      note,
+    }: {
+      clientId: string;
+      amount: number;
+      note?: string;
+    }): Promise<boolean> => {
+      if (amount <= 0) return false;
+      const cleanAmount = roundCurrency(amount);
       const now = new Date().toISOString();
-      const paymentTx: LedgerTransaction = {
-        id: uuid(),
-        client_id: clientId,
-        type: TransactionType.PAYMENT,
-        product_name: 'Payment',
-        quantity: 1,
-        split_count: 1,
-        amount: roundCurrency(amount),
-        note: note?.trim() || undefined,
-        created_at: now,
-        pending_sync: Boolean(isSupabaseConfigured),
-      };
 
-      setTransactions((prevTx) => {
-        const nextTx = [paymentTx, ...prevTx];
-        setClients((prevClients) => recomputeBalances(prevClients, nextTx));
-        return nextTx;
-      });
+      if (isSupabaseConfigured && supabase) {
+        const uid = await getAuthenticatedUserId();
+        if (!uid) return false;
 
-      enqueueOp('ADD_TRANSACTIONS', [paymentTx]);
+        const { data, error } = await supabase
+          .from('transactions')
+          .insert({
+            user_id: uid,
+            client_id: clientId,
+            type: TransactionType.PAYMENT,
+            product_name: 'Payment',
+            quantity: 1,
+            split_count: 1,
+            amount: cleanAmount,
+            note: note?.trim() || null,
+            created_at: now,
+          })
+          .select('*')
+          .single();
+
+        if (error || !data) {
+          pushToast(`Could not save payment: ${error?.message || 'Unknown error'}`, 'error');
+          return false;
+        }
+
+        const { data: updatedClient } = await supabase
+          .from('clients')
+          .select('*')
+          .eq('id', clientId)
+          .eq('user_id', uid)
+          .single();
+
+        setTransactions((prev) => [data as LedgerTransaction, ...prev]);
+        if (updatedClient) {
+          setClients((prev) =>
+            prev.map((c) => (c.id === clientId ? (updatedClient as Client) : c))
+          );
+        }
+      } else {
+        const paymentTx: LedgerTransaction = {
+          id: uuid(),
+          user_id: user.id,
+          client_id: clientId,
+          type: TransactionType.PAYMENT,
+          product_name: 'Payment',
+          quantity: 1,
+          split_count: 1,
+          amount: cleanAmount,
+          note: note?.trim() || undefined,
+          created_at: now,
+        };
+        setTransactions((prevTx) => {
+          const nextTx = [paymentTx, ...prevTx];
+          setClients((prevClients) => recomputeBalances(prevClients, nextTx));
+          return nextTx;
+        });
+      }
+
       triggerHaptic(16);
-
       const clientName = clients.find((c) => c.id === clientId)?.name || 'Client';
-      pushToast(`Recorded ${settings.currency} ${roundCurrency(amount)} from ${clientName}`);
+      pushToast(`Recorded ${settings.currency} ${cleanAmount} from ${clientName}`);
+      return true;
     },
-    [clients, enqueueOp, pushToast, settings.currency]
+    [clients, getAuthenticatedUserId, pushToast, settings.currency, user.id]
   );
 
   const voidTransaction = useCallback(
-    async (txId: string) => {
-      setTransactions((prevTx) => {
-        const nextTx = prevTx.filter((t) => t.id !== txId);
-        setClients((prevClients) => recomputeBalances(prevClients, nextTx));
-        return nextTx;
-      });
-      enqueueOp('VOID_TRANSACTION', txId);
+    async (txId: string): Promise<boolean> => {
+      const targetTx = transactions.find((t) => t.id === txId);
+
+      if (isSupabaseConfigured && supabase) {
+        const uid = await getAuthenticatedUserId();
+        if (!uid) return false;
+
+        const { error } = await supabase
+          .from('transactions')
+          .delete()
+          .eq('id', txId)
+          .eq('user_id', uid);
+
+        if (error) {
+          pushToast(`Could not void entry: ${error.message}`, 'error');
+          return false;
+        }
+
+        setTransactions((prev) => prev.filter((t) => t.id !== txId));
+        if (targetTx) {
+          const { data: updatedClient } = await supabase
+            .from('clients')
+            .select('*')
+            .eq('id', targetTx.client_id)
+            .eq('user_id', uid)
+            .single();
+          if (updatedClient) {
+            setClients((prev) =>
+              prev.map((c) => (c.id === targetTx.client_id ? (updatedClient as Client) : c))
+            );
+          }
+        }
+      } else {
+        setTransactions((prevTx) => {
+          const nextTx = prevTx.filter((t) => t.id !== txId);
+          setClients((prevClients) => recomputeBalances(prevClients, nextTx));
+          return nextTx;
+        });
+      }
+
       triggerHaptic(12);
       pushToast('Entry voided & balance recalculated', 'info');
+      return true;
     },
-    [enqueueOp, pushToast]
+    [getAuthenticatedUserId, pushToast, transactions]
   );
 
   const upsertProduct = useCallback(
-    (product: Omit<Product, 'id'> & { id?: string }) => {
+    async (product: Omit<Product, 'id'> & { id?: string }): Promise<boolean> => {
+      const cleanName = product.name.trim();
+      const cleanPrice = roundCurrency(product.unit_price);
+
+      if (isSupabaseConfigured && supabase) {
+        const uid = await getAuthenticatedUserId();
+        if (!uid) return false;
+
+        if (product.is_default) {
+          await supabase
+            .from('products')
+            .update({ is_default: false })
+            .eq('user_id', uid);
+        }
+
+        if (product.id) {
+          const { data, error } = await supabase
+            .from('products')
+            .update({
+              name: cleanName,
+              unit_price: cleanPrice,
+              is_default: product.is_default,
+            })
+            .eq('id', product.id)
+            .eq('user_id', uid)
+            .select('*')
+            .single();
+
+          if (error || !data) {
+            pushToast(`Could not update item: ${error?.message || 'Unknown error'}`, 'error');
+            return false;
+          }
+
+          setProducts((prev) =>
+            prev.map((p) => {
+              if (p.id === product.id) return data as Product;
+              return product.is_default ? { ...p, is_default: false } : p;
+            })
+          );
+        } else {
+          const { data, error } = await supabase
+            .from('products')
+            .insert({
+              user_id: uid,
+              name: cleanName,
+              unit_price: cleanPrice,
+              is_default: product.is_default,
+            })
+            .select('*')
+            .single();
+
+          if (error || !data) {
+            pushToast(`Could not add item: ${error?.message || 'Unknown error'}`, 'error');
+            return false;
+          }
+
+          setProducts((prev) => {
+            const base = product.is_default ? prev.map((p) => ({ ...p, is_default: false })) : prev;
+            return [...base, data as Product];
+          });
+        }
+
+        pushToast(`Saved item "${cleanName}"`);
+        return true;
+      }
+
       const targetId = product.id || uuid();
       const clean: Product = {
         id: targetId,
-        name: product.name.trim(),
-        unit_price: roundCurrency(product.unit_price),
+        user_id: user.id,
+        name: cleanName,
+        unit_price: cleanPrice,
         is_default: product.is_default,
       };
       setProducts((prev) => {
@@ -815,14 +963,30 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         }
         return mapped;
       });
-      enqueueOp('UPSERT_PRODUCT', clean);
       pushToast(`Saved item "${clean.name}"`);
+      return true;
     },
-    [enqueueOp, pushToast]
+    [getAuthenticatedUserId, pushToast, user.id]
   );
 
   const deleteProduct = useCallback(
-    (productId: string) => {
+    async (productId: string): Promise<boolean> => {
+      if (isSupabaseConfigured && supabase) {
+        const uid = await getAuthenticatedUserId();
+        if (!uid) return false;
+
+        const { error } = await supabase
+          .from('products')
+          .delete()
+          .eq('id', productId)
+          .eq('user_id', uid);
+
+        if (error) {
+          pushToast(`Could not delete item: ${error.message}`, 'error');
+          return false;
+        }
+      }
+
       setProducts((prev) => {
         const filtered = prev.filter((p) => p.id !== productId);
         if (filtered.length > 0 && !filtered.some((p) => p.is_default)) {
@@ -830,21 +994,42 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         }
         return filtered;
       });
-      enqueueOp('DELETE_PRODUCT', productId);
       pushToast('Item removed', 'info');
+      return true;
     },
-    [enqueueOp, pushToast]
+    [getAuthenticatedUserId, pushToast]
   );
 
   const setDefaultProduct = useCallback(
-    (productId: string) => {
-      setProducts((prev) => prev.map((p) => ({ ...p, is_default: p.id === productId })));
-      const target = products.find((p) => p.id === productId);
-      if (target) {
-        enqueueOp('UPSERT_PRODUCT', { ...target, is_default: true });
+    async (productId: string): Promise<boolean> => {
+      if (isSupabaseConfigured && supabase) {
+        const uid = await getAuthenticatedUserId();
+        if (!uid) return false;
+
+        const { error: resetErr } = await supabase
+          .from('products')
+          .update({ is_default: false })
+          .eq('user_id', uid);
+        if (resetErr) {
+          pushToast(`Could not update default item: ${resetErr.message}`, 'error');
+          return false;
+        }
+
+        const { error: setErr } = await supabase
+          .from('products')
+          .update({ is_default: true })
+          .eq('id', productId)
+          .eq('user_id', uid);
+        if (setErr) {
+          pushToast(`Could not update default item: ${setErr.message}`, 'error');
+          return false;
+        }
       }
+
+      setProducts((prev) => prev.map((p) => ({ ...p, is_default: p.id === productId })));
+      return true;
     },
-    [enqueueOp, products]
+    [getAuthenticatedUserId, pushToast]
   );
 
   const kpis = useMemo(() => {
@@ -925,33 +1110,78 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     pushToast('Downloaded CSV ledger backup');
   }, [clients, pushToast, settings.shopName, transactions]);
 
-  const resetDemoData = useCallback(() => {
+  const resetDemoData = useCallback(async () => {
     const starter = createSampleData();
+    if (isSupabaseConfigured && supabase) {
+      const uid = await getAuthenticatedUserId();
+      if (!uid) return;
+
+      const { error: clientErr } = await supabase.from('clients').insert(
+        starter.clients.map((c) => ({
+          id: c.id,
+          user_id: uid,
+          name: c.name,
+          whatsapp_number: c.whatsapp_number,
+          created_at: c.created_at,
+        }))
+      );
+      if (clientErr) {
+        pushToast(`Failed to insert sample clients: ${clientErr.message}`, 'error');
+        return;
+      }
+
+      const { error: txErr } = await supabase.from('transactions').insert(
+        starter.transactions.map((t) => ({
+          id: t.id,
+          user_id: uid,
+          client_id: t.client_id,
+          type: t.type,
+          product_name: t.product_name,
+          quantity: t.quantity,
+          split_count: t.split_count,
+          amount: t.amount,
+          note: t.note ?? null,
+          created_at: t.created_at,
+        }))
+      );
+      if (txErr) {
+        pushToast(`Failed to insert sample transactions: ${txErr.message}`, 'error');
+        return;
+      }
+
+      await fetchAllFromSupabase();
+      pushToast('Added sample shop data to your database', 'info');
+      return;
+    }
+
     setClients(starter.clients);
     setProducts(starter.products);
     setTransactions(starter.transactions);
-    setPendingOps([]);
-    for (const p of starter.products) enqueueOp('UPSERT_PRODUCT', p);
-    for (const c of starter.clients) enqueueOp('ADD_CLIENT', c);
-    enqueueOp('ADD_TRANSACTIONS', starter.transactions);
     pushToast('Loaded sample shop data', 'info');
-  }, [enqueueOp, pushToast]);
+  }, [fetchAllFromSupabase, getAuthenticatedUserId, pushToast]);
 
-  const clearAllRecords = useCallback(() => {
-    for (const c of clients) {
-      enqueueOp('DELETE_CLIENT', c.id);
+  const clearAllRecords = useCallback(async () => {
+    if (isSupabaseConfigured && supabase) {
+      const uid = await getAuthenticatedUserId();
+      if (!uid) return;
+
+      const { error } = await supabase.from('clients').delete().eq('user_id', uid);
+      if (error) {
+        pushToast(`Failed to clear records: ${error.message}`, 'error');
+        return;
+      }
     }
+
     setClients([]);
     setTransactions([]);
     pushToast('Cleared all clients and ledger entries', 'info');
-  }, [clients, enqueueOp, pushToast]);
+  }, [getAuthenticatedUserId, pushToast]);
 
   const logoutAndClear = useCallback(async () => {
-    signingOutRef.current = true;
+    // ONLY clear in-memory React state — NEVER delete database records on logout
     setClients([]);
     setTransactions([]);
     setProducts([]);
-    setPendingOps([]);
     await signOut();
   }, [signOut]);
 
@@ -962,7 +1192,7 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         products,
         transactions,
         settings,
-        pendingOpsCount: pendingOps.length,
+        pendingOpsCount: 0,
         isOnline,
         isSyncing,
         isInitialLoading,
@@ -986,7 +1216,7 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         exportCsv,
         resetDemoData,
         clearAllRecords,
-        syncNow,
+        syncNow: fetchAllFromSupabase,
         logoutAndClear,
       }}
     >

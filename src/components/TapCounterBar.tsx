@@ -93,7 +93,7 @@ export const TapCounterBar: React.FC<TapCounterBarProps> = ({
     if (isSaving || netAfterDiscount <= 0) return;
     setIsSaving(true);
     try {
-      await saveDebtSale({
+      const ok = await saveDebtSale({
         clientIds: selectedClients.map((c) => c.id),
         productName: isCustomMode ? customLabel.trim() || 'Custom' : activeProduct?.name || 'Item',
         quantity: isCustomMode ? 1 : quantity,
@@ -101,12 +101,14 @@ export const TapCounterBar: React.FC<TapCounterBarProps> = ({
         discountAmount: discountVal,
         depositAmount: depositVal,
       });
-      setQuantity(1);
-      setCustomAmount('');
-      setDiscountInput('');
-      setDepositInput('');
-      setShowAdjustments(false);
-      onClearSelection();
+      if (ok) {
+        setQuantity(1);
+        setCustomAmount('');
+        setDiscountInput('');
+        setDepositInput('');
+        setShowAdjustments(false);
+        onClearSelection();
+      }
     } finally {
       setIsSaving(false);
     }

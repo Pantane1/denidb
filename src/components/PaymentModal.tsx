@@ -40,12 +40,12 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ client, onClose }) =
     if (isSaving || numericAmount <= 0) return;
     setIsSaving(true);
     try {
-      await recordPayment({
+      const ok = await recordPayment({
         clientId: client.id,
         amount: numericAmount,
         note,
       });
-      onClose();
+      if (ok) onClose();
     } finally {
       setIsSaving(false);
     }
