@@ -1,0 +1,6 @@
+{
+  "name": "DeniBook",
+  "description": "Tap-first credit and debt ledger PWA for small businesses with split sales, instant payments, and WhatsApp reminders.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
