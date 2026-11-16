@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
-import { Lock, Moon, Sun, UserPlus } from 'lucide-react';
+import { Loader2, Lock, LogOut, Moon, Sun, UserPlus } from 'lucide-react';
 import { AddClientModal } from './components/AddClientModal';
+import { AuthScreen } from './components/AuthScreen';
 import { ClientGrid } from './components/ClientGrid';
 import { ClientProfileDrawer } from './components/ClientProfileDrawer';
 import { OfflineBanner } from './components/OfflineBanner';
@@ -10,12 +11,22 @@ import { PWAInstallButton } from './components/PWAInstallButton';
 import { SummaryKPIs } from './components/SummaryKPIs';
 import { TapCounterBar } from './components/TapCounterBar';
 import { ToastStack } from './components/ToastStack';
+import { AuthProvider, useAuth } from './lib/auth';
 import { DeniBookProvider, useDeniBook } from './lib/store';
 
 type AppTab = 'ledger' | 'settings';
 
 const DeniBookShell: React.FC = () => {
-  const { clients, isLocked, settings, updateSettings, lockApp } = useDeniBook();
+  const { user, profile } = useAuth();
+  const {
+    clients,
+    isLocked,
+    isInitialLoading,
+    settings,
+    updateSettings,
+    lockApp,
+    logoutAndClear,
+  } = useDeniBook();
   const [activeTab, setActiveTab] = useState<AppTab>('ledger');
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [profileClientId, setProfileClientId] = useState<string | null>(null);
@@ -29,6 +40,8 @@ const DeniBookShell: React.FC = () => {
   if (isLocked) {
     return <PinLockScreen />;
   }
+
+  const displayShopName = profile?.shop_name || settings.shopName || 'My Shop';
 
   const toggleSelect = (id: string) => {
     setSelectedIds((prev) =>
@@ -51,7 +64,10 @@ const DeniBookShell: React.FC = () => {
           </button>
 
           {/* Zone 2: Concise Single-Line Navigation */}
-          <nav className="flex items-center gap-5 sm:gap-6 text-sm font-semibold" aria-label="Main navigation">
+          <nav
+            className="flex items-center gap-4 sm:gap-6 text-sm font-semibold"
+            aria-label="Main navigation"
+          >
             <button
               type="button"
               onClick={() => setActiveTab('ledger')}
@@ -103,11 +119,16 @@ const DeniBookShell: React.FC = () => {
       >
         {activeTab === 'ledger' ? (
           <div className="space-y-5">
-            {/* Compact Utility Row (Theme + Lock + Mobile Install) */}
-            <div className="flex items-center justify-between gap-3">
-              <h1 className="text-lg sm:text-xl font-bold text-stone-900 dark:text-stone-50">
-                Daily Credit Book
-              </h1>
+            {/* Personalized Shop Dashboard Header & Account Controls */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="min-w-0">
+                <h1 className="text-xl sm:text-2xl font-bold text-stone-900 dark:text-stone-50 truncate">
+                  {displayShopName}
+                </h1>
+                <p className="text-xs text-stone-500 dark:text-stone-400 truncate">
+                  Daily Credit Book · {user?.email}
+                </p>
+              </div>
 
               <div className="flex items-center gap-2 shrink-0">
                 <div className="sm:hidden">
@@ -139,18 +160,36 @@ const DeniBookShell: React.FC = () => {
                   <Lock className="w-4 h-4" />
                   <span className="hidden sm:inline">Lock</span>
                 </button>
+                <button
+                  type="button"
+                  onClick={logoutAndClear}
+                  aria-label="Sign out or switch account"
+                  className="min-h-[40px] min-w-[40px] px-3 rounded-xl bg-white dark:bg-[#131917] border border-stone-200 dark:border-[#222B28] text-stone-700 dark:text-stone-200 flex items-center justify-center gap-1.5 text-xs font-semibold hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200 dark:hover:bg-rose-950/30 dark:hover:text-rose-300 transition-colors whitespace-nowrap"
+                >
+                  <LogOut className="w-4 h-4" />
+                  <span>Logout</span>
+                </button>
               </div>
             </div>
 
-            <SummaryKPIs />
+            {isInitialLoading && clients.length === 0 ? (
+              <div className="rounded-2xl bg-white dark:bg-[#131917] border border-stone-200 dark:border-[#222B28] p-10 flex flex-col items-center justify-center gap-3 text-stone-500 dark:text-stone-400">
+                <Loader2 className="w-6 h-6 animate-spin text-teal-700 dark:text-teal-400" />
+                <p className="text-sm font-medium">Loading {displayShopName} ledger...</p>
+              </div>
+            ) : (
+              <>
+                <SummaryKPIs />
 
-            <ClientGrid
-              selectedIds={selectedIds}
-              onToggleSelect={toggleSelect}
-              onClearSelection={() => setSelectedIds([])}
-              onOpenProfile={(client) => setProfileClientId(client.id)}
-              onOpenAddClient={() => setShowAddClient(true)}
-            />
+                <ClientGrid
+                  selectedIds={selectedIds}
+                  onToggleSelect={toggleSelect}
+                  onClearSelection={() => setSelectedIds([])}
+                  onOpenProfile={(client) => setProfileClientId(client.id)}
+                  onOpenAddClient={() => setShowAddClient(true)}
+                />
+              </>
+            )}
           </div>
         ) : (
           <ProductSettings />
@@ -189,10 +228,35 @@ const DeniBookShell: React.FC = () => {
   );
 };
 
-export default function App() {
+const AuthGate: React.FC = () => {
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-[#F6F7F5] dark:bg-[#0B0F0E] flex flex-col items-center justify-center gap-3 px-4">
+        <Loader2 className="w-8 h-8 animate-spin text-teal-700 dark:text-teal-400" />
+        <p className="text-sm font-semibold text-stone-600 dark:text-stone-300">
+          Checking shop session...
+        </p>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <AuthScreen />;
+  }
+
   return (
-    <DeniBookProvider>
+    <DeniBookProvider key={user.id}>
       <DeniBookShell />
     </DeniBookProvider>
+  );
+};
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AuthGate />
+    </AuthProvider>
   );
 }

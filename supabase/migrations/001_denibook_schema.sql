@@ -1,13 +1,23 @@
--- DeniBook Supabase PostgreSQL Schema & Atomic Triggers
+-- DeniBook Multi-Tenant Supabase PostgreSQL Schema, Profiles & Atomic Triggers
 -- Run this migration in your Supabase SQL Editor or via Supabase CLI.
 
 -- 1. Extensions
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
--- 2. Tables
+-- 2. Shop Owner Profiles (1 row per authenticated user)
+CREATE TABLE IF NOT EXISTS public.profiles (
+  id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  shop_name TEXT NOT NULL DEFAULT 'My Shop' CHECK (char_length(trim(shop_name)) > 0),
+  currency TEXT NOT NULL DEFAULT 'KES',
+  country_code TEXT NOT NULL DEFAULT '254',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 3. Core Multi-Tenant Ledger Tables (owner_id defaults to auth.uid())
 CREATE TABLE IF NOT EXISTS public.clients (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  owner_id UUID REFERENCES auth.users(id) ON DELETE CASCADE DEFAULT auth.uid(),
+  owner_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE DEFAULT auth.uid(),
   name TEXT NOT NULL CHECK (char_length(trim(name)) > 0),
   whatsapp_number TEXT NOT NULL CHECK (char_length(trim(whatsapp_number)) > 0),
   total_balance NUMERIC(12, 2) NOT NULL DEFAULT 0,
@@ -17,7 +27,7 @@ CREATE TABLE IF NOT EXISTS public.clients (
 
 CREATE TABLE IF NOT EXISTS public.products (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  owner_id UUID REFERENCES auth.users(id) ON DELETE CASCADE DEFAULT auth.uid(),
+  owner_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE DEFAULT auth.uid(),
   name TEXT NOT NULL CHECK (char_length(trim(name)) > 0),
   unit_price NUMERIC(12, 2) NOT NULL CHECK (unit_price >= 0),
   is_default BOOLEAN NOT NULL DEFAULT false,
@@ -26,7 +36,7 @@ CREATE TABLE IF NOT EXISTS public.products (
 
 CREATE TABLE IF NOT EXISTS public.transactions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  owner_id UUID REFERENCES auth.users(id) ON DELETE CASCADE DEFAULT auth.uid(),
+  owner_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE DEFAULT auth.uid(),
   client_id UUID NOT NULL REFERENCES public.clients(id) ON DELETE CASCADE,
   type TEXT NOT NULL CHECK (type IN ('DEBT', 'PAYMENT')),
   product_name TEXT NOT NULL,
@@ -37,17 +47,59 @@ CREATE TABLE IF NOT EXISTS public.transactions (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- 3. Indexes for fast mobile queries
+-- Remove any legacy unowned seed rows if upgrading from an earlier schema
+DELETE FROM public.products WHERE owner_id IS NULL;
+
+-- 4. Indexes for fast mobile queries
 CREATE INDEX IF NOT EXISTS idx_clients_owner_balance ON public.clients (owner_id, total_balance DESC);
 CREATE INDEX IF NOT EXISTS idx_clients_name ON public.clients (name);
+CREATE INDEX IF NOT EXISTS idx_products_owner ON public.products (owner_id, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_transactions_owner_created ON public.transactions (owner_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_transactions_client_created ON public.transactions (client_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_transactions_created ON public.transactions (created_at DESC);
 
--- 4. Atomic Balance Synchronization Trigger
+-- 5. Auto-provision Profile & Default Product ("Fert" @ 50) on User Sign Up
+CREATE OR REPLACE FUNCTION public.handle_new_user_profile()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_shop_name TEXT;
+BEGIN
+  v_shop_name := COALESCE(
+    NULLIF(trim(NEW.raw_user_meta_data->>'shop_name'), ''),
+    'My Shop'
+  );
+
+  INSERT INTO public.profiles (id, shop_name)
+  VALUES (NEW.id, v_shop_name)
+  ON CONFLICT (id) DO UPDATE
+    SET shop_name = EXCLUDED.shop_name,
+        updated_at = now();
+
+  INSERT INTO public.products (owner_id, name, unit_price, is_default)
+  SELECT NEW.id, 'Fert', 50, true
+  WHERE NOT EXISTS (
+    SELECT 1 FROM public.products WHERE owner_id = NEW.id
+  );
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
+AFTER INSERT ON auth.users
+FOR EACH ROW
+EXECUTE FUNCTION public.handle_new_user_profile();
+
+-- 6. Atomic Balance Synchronization Trigger
 CREATE OR REPLACE FUNCTION public.sync_client_total_balance()
 RETURNS TRIGGER
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public
 AS $$
 DECLARE
   target_client_id UUID;
@@ -74,7 +126,6 @@ BEGIN
     updated_at = now()
   WHERE id = target_client_id;
 
-  -- If a transaction was reassigned to a different client, recalculate the old client too
   IF (TG_OP = 'UPDATE' AND OLD.client_id IS DISTINCT FROM NEW.client_id) THEN
     UPDATE public.clients
     SET
@@ -103,7 +154,7 @@ AFTER INSERT OR UPDATE OR DELETE ON public.transactions
 FOR EACH ROW
 EXECUTE FUNCTION public.sync_client_total_balance();
 
--- 5. Atomic Split-Sale RPC (handles single or multi-client split sales in one DB transaction)
+-- 7. Atomic Split-Sale RPC (handles single or multi-client split sales in one DB transaction)
 CREATE OR REPLACE FUNCTION public.record_split_sale(
   p_client_ids UUID[],
   p_product_name TEXT,
@@ -137,6 +188,7 @@ BEGIN
     END IF;
 
     INSERT INTO public.transactions (
+      owner_id,
       client_id,
       type,
       product_name,
@@ -146,6 +198,7 @@ BEGIN
       note
     )
     VALUES (
+      auth.uid(),
       p_client_ids[v_i],
       'DEBT',
       p_product_name,
@@ -161,18 +214,26 @@ BEGIN
 END;
 $$;
 
--- 6. Row Level Security (RLS)
+-- 8. Strict Multi-Tenant Row Level Security (RLS)
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.clients ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.products ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.transactions ENABLE ROW LEVEL SECURITY;
 
--- Policies: Each authenticated shop owner can read & manage their own records
+DROP POLICY IF EXISTS "User manages own profile" ON public.profiles;
+CREATE POLICY "User manages own profile"
+ON public.profiles
+FOR ALL
+TO authenticated
+USING (id = auth.uid())
+WITH CHECK (id = auth.uid());
+
 DROP POLICY IF EXISTS "Owner manages clients" ON public.clients;
 CREATE POLICY "Owner manages clients"
 ON public.clients
 FOR ALL
 TO authenticated
-USING (owner_id = auth.uid() OR owner_id IS NULL)
+USING (owner_id = auth.uid())
 WITH CHECK (owner_id = auth.uid());
 
 DROP POLICY IF EXISTS "Owner manages products" ON public.products;
@@ -180,7 +241,7 @@ CREATE POLICY "Owner manages products"
 ON public.products
 FOR ALL
 TO authenticated
-USING (owner_id = auth.uid() OR owner_id IS NULL)
+USING (owner_id = auth.uid())
 WITH CHECK (owner_id = auth.uid());
 
 DROP POLICY IF EXISTS "Owner manages transactions" ON public.transactions;
@@ -188,12 +249,5 @@ CREATE POLICY "Owner manages transactions"
 ON public.transactions
 FOR ALL
 TO authenticated
-USING (owner_id = auth.uid() OR owner_id IS NULL)
+USING (owner_id = auth.uid())
 WITH CHECK (owner_id = auth.uid());
-
--- 7. Seed Default Product ("Fert" @ 50) for global/initial fallback
-INSERT INTO public.products (owner_id, name, unit_price, is_default)
-SELECT NULL, 'Fert', 50, true
-WHERE NOT EXISTS (
-  SELECT 1 FROM public.products WHERE name = 'Fert' AND owner_id IS NULL
-);

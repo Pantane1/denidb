@@ -3,6 +3,18 @@ export enum TransactionType {
   PAYMENT = 'PAYMENT',
 }
 
+export interface AuthUser {
+  id: string;
+  email: string;
+}
+
+export interface UserProfile {
+  id: string;
+  shop_name: string;
+  currency: string;
+  country_code: string;
+}
+
 export interface Client {
   id: string;
   name: string;

@@ -8,23 +8,26 @@ import {
   ToastItem,
   TransactionType,
 } from '../types';
+import { useAuth } from './auth';
 import { isSameLocalDay, roundCurrency, splitAmountEvenly } from './currency';
 import { DEFAULT_WHATSAPP_TEMPLATE, sanitizeWhatsAppNumber } from './phone';
 import { isSupabaseConfigured, supabase } from './supabase';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
-import type { Session } from '@supabase/supabase-js';
 
-const KEYS = {
-  clients: 'denibook_clients_v1',
-  products: 'denibook_products_v1',
-  transactions: 'denibook_transactions_v1',
-  settings: 'denibook_settings_v1',
-  pending: 'denibook_pending_ops_v1',
-  initialized: 'denibook_initialized_v1',
-};
+function tenantKeys(userId: string) {
+  const prefix = `denibook_v2_${userId}_`;
+  return {
+    clients: `${prefix}clients`,
+    products: `${prefix}products`,
+    transactions: `${prefix}transactions`,
+    settings: `${prefix}settings`,
+    pending: `${prefix}pending`,
+    initialized: `${prefix}initialized`,
+  };
+}
 
 const DEFAULT_SETTINGS: AppSettings = {
-  shopName: 'DeniBook',
+  shopName: 'My Shop',
   currency: 'KES',
   countryCode: '254',
   whatsappTemplate: DEFAULT_WHATSAPP_TEMPLATE,
@@ -44,7 +47,7 @@ function uuid(): string {
   });
 }
 
-function createStarterData(): {
+function createSampleData(): {
   clients: Client[];
   products: Product[];
   transactions: LedgerTransaction[];
@@ -52,9 +55,8 @@ function createStarterData(): {
   const now = Date.now();
   const hoursAgo = (h: number) => new Date(now - h * 3600 * 1000).toISOString();
 
-  const fertId = uuid();
   const products: Product[] = [
-    { id: fertId, name: 'Fert', unit_price: 50, is_default: true },
+    { id: uuid(), name: 'Fert', unit_price: 50, is_default: true },
     { id: uuid(), name: 'Seeds Pack', unit_price: 120, is_default: false },
     { id: uuid(), name: 'Feed 2kg', unit_price: 200, is_default: false },
   ];
@@ -63,7 +65,6 @@ function createStarterData(): {
   const c2 = uuid();
   const c3 = uuid();
   const c4 = uuid();
-  const c5 = uuid();
 
   const transactions: LedgerTransaction[] = [
     {
@@ -111,16 +112,6 @@ function createStarterData(): {
     },
     {
       id: uuid(),
-      client_id: c3,
-      type: TransactionType.DEBT,
-      product_name: 'Seeds Pack',
-      quantity: 2,
-      split_count: 1,
-      amount: 240,
-      created_at: hoursAgo(26),
-    },
-    {
-      id: uuid(),
       client_id: c4,
       type: TransactionType.DEBT,
       product_name: 'Fert',
@@ -139,16 +130,6 @@ function createStarterData(): {
       amount: 100,
       note: 'Settled in full',
       created_at: hoursAgo(4),
-    },
-    {
-      id: uuid(),
-      client_id: c5,
-      type: TransactionType.DEBT,
-      product_name: 'Feed 2kg',
-      quantity: 2,
-      split_count: 1,
-      amount: 400,
-      created_at: hoursAgo(50),
     },
   ];
 
@@ -184,14 +165,6 @@ function createStarterData(): {
       total_balance: 0,
       created_at: hoursAgo(72),
       updated_at: hoursAgo(4),
-    },
-    {
-      id: c5,
-      name: 'Amina Hassan',
-      whatsapp_number: '254756789012',
-      total_balance: 0,
-      created_at: hoursAgo(72),
-      updated_at: hoursAgo(50),
     },
   ];
 
@@ -250,8 +223,8 @@ interface DeniBookContextValue {
   pendingOpsCount: number;
   isOnline: boolean;
   isSyncing: boolean;
+  isInitialLoading: boolean;
   isLocked: boolean;
-  session: Session | null;
   toasts: ToastItem[];
   kpis: {
     totalOwed: number;
@@ -288,53 +261,81 @@ interface DeniBookContextValue {
   resetDemoData: () => void;
   clearAllRecords: () => void;
   syncNow: () => Promise<void>;
+  logoutAndClear: () => Promise<void>;
 }
 
 const DeniBookContext = createContext<DeniBookContextValue | null>(null);
 
 export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { user, session, profile, signOut, updateProfile } = useAuth();
   const isOnline = useOnlineStatus();
+
+  if (!user) {
+    throw new Error('DeniBookProvider requires an authenticated user');
+  }
+
+  const keys = useMemo(() => tenantKeys(user.id), [user.id]);
+
   const [settings, setSettings] = useState<AppSettings>(() => ({
     ...DEFAULT_SETTINGS,
-    ...readJson<Partial<AppSettings>>(KEYS.settings, {}),
+    shopName: profile?.shop_name || DEFAULT_SETTINGS.shopName,
+    currency: profile?.currency || DEFAULT_SETTINGS.currency,
+    countryCode: profile?.country_code || DEFAULT_SETTINGS.countryCode,
+    ...readJson<Partial<AppSettings>>(keys.settings, {}),
   }));
 
+  // Keep settings synced with profile metadata when loaded
+  useEffect(() => {
+    if (!profile) return;
+    setSettings((prev) => ({
+      ...prev,
+      shopName: profile.shop_name || prev.shopName,
+      currency: profile.currency || prev.currency,
+      countryCode: profile.country_code || prev.countryCode,
+    }));
+  }, [profile]);
+
   const initialSeed = useMemo(() => {
-    const alreadyInit = localStorage.getItem(KEYS.initialized);
+    const alreadyInit = localStorage.getItem(keys.initialized);
     if (!alreadyInit) {
-      const starter = createStarterData();
-      localStorage.setItem(KEYS.clients, JSON.stringify(starter.clients));
-      localStorage.setItem(KEYS.products, JSON.stringify(starter.products));
-      localStorage.setItem(KEYS.transactions, JSON.stringify(starter.transactions));
-      localStorage.setItem(KEYS.initialized, '1');
-      return starter;
+      const defaultProducts: Product[] = [
+        { id: uuid(), name: 'Fert', unit_price: 50, is_default: true },
+      ];
+      localStorage.setItem(keys.clients, JSON.stringify([]));
+      localStorage.setItem(keys.products, JSON.stringify(defaultProducts));
+      localStorage.setItem(keys.transactions, JSON.stringify([]));
+      localStorage.setItem(keys.initialized, '1');
+      return { clients: [], products: defaultProducts, transactions: [] };
     }
-    const clients = readJson<Client[]>(KEYS.clients, []);
-    const products = readJson<Product[]>(KEYS.products, [
+    const savedClients = readJson<Client[]>(keys.clients, []);
+    const savedProducts = readJson<Product[]>(keys.products, [
       { id: uuid(), name: 'Fert', unit_price: 50, is_default: true },
     ]);
-    const transactions = readJson<LedgerTransaction[]>(KEYS.transactions, []);
+    const savedTransactions = readJson<LedgerTransaction[]>(keys.transactions, []);
     return {
-      clients: recomputeBalances(clients, transactions),
-      products,
-      transactions,
+      clients: recomputeBalances(savedClients, savedTransactions),
+      products: savedProducts,
+      transactions: savedTransactions,
     };
-  }, []);
+  }, [keys]);
 
   const [clients, setClients] = useState<Client[]>(initialSeed.clients);
   const [products, setProducts] = useState<Product[]>(initialSeed.products);
   const [transactions, setTransactions] = useState<LedgerTransaction[]>(initialSeed.transactions);
   const [pendingOps, setPendingOps] = useState<PendingSyncOp[]>(() =>
-    readJson<PendingSyncOp[]>(KEYS.pending, [])
+    readJson<PendingSyncOp[]>(keys.pending, [])
   );
   const [isSyncing, setIsSyncing] = useState(false);
-  const [session, setSession] = useState<Session | null>(null);
+  const [isInitialLoading, setIsInitialLoading] = useState<boolean>(
+    Boolean(isSupabaseConfigured && session)
+  );
   const [isLocked, setIsLocked] = useState<boolean>(() => {
-    const saved = readJson<Partial<AppSettings>>(KEYS.settings, {});
+    const saved = readJson<Partial<AppSettings>>(keys.settings, {});
     return Boolean(saved.pinEnabled);
   });
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const syncingRef = useRef(false);
+  const signingOutRef = useRef(false);
 
   // Sync theme class on <html>
   useEffect(() => {
@@ -346,26 +347,36 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   }, [settings.theme]);
 
-  // Persist local cache
+  // Persist tenant-isolated local cache (skipped during sign-out cleanup)
   useEffect(() => {
-    localStorage.setItem(KEYS.clients, JSON.stringify(clients));
-  }, [clients]);
+    if (!signingOutRef.current) {
+      localStorage.setItem(keys.clients, JSON.stringify(clients));
+    }
+  }, [clients, keys.clients]);
 
   useEffect(() => {
-    localStorage.setItem(KEYS.products, JSON.stringify(products));
-  }, [products]);
+    if (!signingOutRef.current) {
+      localStorage.setItem(keys.products, JSON.stringify(products));
+    }
+  }, [products, keys.products]);
 
   useEffect(() => {
-    localStorage.setItem(KEYS.transactions, JSON.stringify(transactions));
-  }, [transactions]);
+    if (!signingOutRef.current) {
+      localStorage.setItem(keys.transactions, JSON.stringify(transactions));
+    }
+  }, [transactions, keys.transactions]);
 
   useEffect(() => {
-    localStorage.setItem(KEYS.settings, JSON.stringify(settings));
-  }, [settings]);
+    if (!signingOutRef.current) {
+      localStorage.setItem(keys.settings, JSON.stringify(settings));
+    }
+  }, [settings, keys.settings]);
 
   useEffect(() => {
-    localStorage.setItem(KEYS.pending, JSON.stringify(pendingOps));
-  }, [pendingOps]);
+    if (!signingOutRef.current) {
+      localStorage.setItem(keys.pending, JSON.stringify(pendingOps));
+    }
+  }, [pendingOps, keys.pending]);
 
   const pushToast = useCallback((message: string, tone: ToastItem['tone'] = 'success') => {
     const id = uuid();
@@ -379,26 +390,14 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  // Supabase auth session listener
-  useEffect(() => {
-    if (!supabase) return;
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session ?? null);
-    });
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      setSession(nextSession);
-    });
-    return () => subscription.unsubscribe();
-  }, []);
-
   const syncNow = useCallback(async () => {
     if (!isSupabaseConfigured || !supabase || !session || !isOnline || syncingRef.current) {
+      setIsInitialLoading(false);
       return;
     }
     syncingRef.current = true;
     setIsSyncing(true);
+    const ownerId = session.user.id;
     try {
       const remaining: PendingSyncOp[] = [];
       for (const op of pendingOps) {
@@ -407,6 +406,7 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             const c = op.payload as Client;
             const { error } = await supabase.from('clients').upsert({
               id: c.id,
+              owner_id: ownerId,
               name: c.name,
               whatsapp_number: c.whatsapp_number,
               created_at: c.created_at,
@@ -417,17 +417,23 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             const { error } = await supabase
               .from('clients')
               .update({ name: c.name, whatsapp_number: c.whatsapp_number })
-              .eq('id', c.id);
+              .eq('id', c.id)
+              .eq('owner_id', ownerId);
             if (error) throw error;
           } else if (op.kind === 'DELETE_CLIENT') {
             const id = op.payload as string;
-            const { error } = await supabase.from('clients').delete().eq('id', id);
+            const { error } = await supabase
+              .from('clients')
+              .delete()
+              .eq('id', id)
+              .eq('owner_id', ownerId);
             if (error) throw error;
           } else if (op.kind === 'ADD_TRANSACTIONS') {
             const txs = op.payload as LedgerTransaction[];
             const { error } = await supabase.from('transactions').insert(
               txs.map((t) => ({
                 id: t.id,
+                owner_id: ownerId,
                 client_id: t.client_id,
                 type: t.type,
                 product_name: t.product_name,
@@ -441,12 +447,17 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             if (error) throw error;
           } else if (op.kind === 'VOID_TRANSACTION') {
             const id = op.payload as string;
-            const { error } = await supabase.from('transactions').delete().eq('id', id);
+            const { error } = await supabase
+              .from('transactions')
+              .delete()
+              .eq('id', id)
+              .eq('owner_id', ownerId);
             if (error) throw error;
           } else if (op.kind === 'UPSERT_PRODUCT') {
             const p = op.payload as Product;
             const { error } = await supabase.from('products').upsert({
               id: p.id,
+              owner_id: ownerId,
               name: p.name,
               unit_price: p.unit_price,
               is_default: p.is_default,
@@ -454,7 +465,11 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             if (error) throw error;
           } else if (op.kind === 'DELETE_PRODUCT') {
             const id = op.payload as string;
-            const { error } = await supabase.from('products').delete().eq('id', id);
+            const { error } = await supabase
+              .from('products')
+              .delete()
+              .eq('id', id)
+              .eq('owner_id', ownerId);
             if (error) throw error;
           }
         } catch {
@@ -465,16 +480,50 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
       if (remaining.length === 0) {
         const [clientsRes, productsRes, txRes] = await Promise.all([
-          supabase.from('clients').select('*').order('name', { ascending: true }),
-          supabase.from('products').select('*').order('created_at', { ascending: true }),
-          supabase.from('transactions').select('*').order('created_at', { ascending: false }).limit(1000),
+          supabase
+            .from('clients')
+            .select('*')
+            .eq('owner_id', ownerId)
+            .order('name', { ascending: true }),
+          supabase
+            .from('products')
+            .select('*')
+            .eq('owner_id', ownerId)
+            .order('created_at', { ascending: true }),
+          supabase
+            .from('transactions')
+            .select('*')
+            .eq('owner_id', ownerId)
+            .order('created_at', { ascending: false })
+            .limit(1000),
         ]);
-        if (!clientsRes.error && clientsRes.data && clientsRes.data.length > 0) {
+
+        if (!clientsRes.error && clientsRes.data) {
           setClients(clientsRes.data as Client[]);
         }
-        if (!productsRes.error && productsRes.data && productsRes.data.length > 0) {
-          setProducts(productsRes.data as Product[]);
+
+        if (!productsRes.error && productsRes.data) {
+          if (productsRes.data.length === 0) {
+            // Seed default "Fert" @ 50 for this user if trigger hadn't seeded yet
+            const fertId = uuid();
+            const { data: seeded } = await supabase
+              .from('products')
+              .insert({
+                id: fertId,
+                owner_id: ownerId,
+                name: 'Fert',
+                unit_price: 50,
+                is_default: true,
+              })
+              .select('*');
+            if (seeded && seeded.length > 0) {
+              setProducts(seeded as Product[]);
+            }
+          } else {
+            setProducts(productsRes.data as Product[]);
+          }
         }
+
         if (!txRes.error && txRes.data) {
           setTransactions(txRes.data as LedgerTransaction[]);
         }
@@ -482,12 +531,15 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     } finally {
       syncingRef.current = false;
       setIsSyncing(false);
+      setIsInitialLoading(false);
     }
   }, [isOnline, pendingOps, session]);
 
   useEffect(() => {
     if (isOnline && session) {
       syncNow();
+    } else {
+      setIsInitialLoading(false);
     }
   }, [isOnline, session, pendingOps.length, syncNow]);
 
@@ -515,9 +567,25 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setIsLocked(true);
   }, []);
 
-  const updateSettings = useCallback((patch: Partial<AppSettings>) => {
-    setSettings((prev) => ({ ...prev, ...patch }));
-  }, []);
+  const updateSettings = useCallback(
+    (patch: Partial<AppSettings>) => {
+      setSettings((prev) => ({ ...prev, ...patch }));
+      const profilePatch: Partial<{ shop_name: string; currency: string; country_code: string }> = {};
+      if (patch.shopName !== undefined && patch.shopName.trim()) {
+        profilePatch.shop_name = patch.shopName.trim();
+      }
+      if (patch.currency !== undefined && patch.currency.trim()) {
+        profilePatch.currency = patch.currency.trim();
+      }
+      if (patch.countryCode !== undefined && patch.countryCode.trim()) {
+        profilePatch.country_code = patch.countryCode.trim();
+      }
+      if (Object.keys(profilePatch).length > 0) {
+        void updateProfile(profilePatch);
+      }
+    },
+    [updateProfile]
+  );
 
   const addClient = useCallback(
     (name: string, phone: string) => {
@@ -544,7 +612,12 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       setClients((prev) =>
         prev.map((c) =>
           c.id === id
-            ? { ...c, name: name.trim(), whatsapp_number: formatted, updated_at: new Date().toISOString() }
+            ? {
+                ...c,
+                name: name.trim(),
+                whatsapp_number: formatted,
+                updated_at: new Date().toISOString(),
+              }
             : c
         )
       );
@@ -765,9 +838,7 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const setDefaultProduct = useCallback(
     (productId: string) => {
-      setProducts((prev) =>
-        prev.map((p) => ({ ...p, is_default: p.id === productId }))
-      );
+      setProducts((prev) => prev.map((p) => ({ ...p, is_default: p.id === productId })));
       const target = products.find((p) => p.id === productId);
       if (target) {
         enqueueOp('UPSERT_PRODUCT', { ...target, is_default: true });
@@ -844,29 +915,45 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `denibook-ledger-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.download = `denibook-${settings.shopName.toLowerCase().replace(/\s+/g, '-')}-${new Date()
+      .toISOString()
+      .slice(0, 10)}.csv`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
     pushToast('Downloaded CSV ledger backup');
-  }, [clients, pushToast, transactions]);
+  }, [clients, pushToast, settings.shopName, transactions]);
 
   const resetDemoData = useCallback(() => {
-    const starter = createStarterData();
+    const starter = createSampleData();
     setClients(starter.clients);
     setProducts(starter.products);
     setTransactions(starter.transactions);
     setPendingOps([]);
-    pushToast('Restored starter ledger data', 'info');
-  }, [pushToast]);
+    for (const p of starter.products) enqueueOp('UPSERT_PRODUCT', p);
+    for (const c of starter.clients) enqueueOp('ADD_CLIENT', c);
+    enqueueOp('ADD_TRANSACTIONS', starter.transactions);
+    pushToast('Loaded sample shop data', 'info');
+  }, [enqueueOp, pushToast]);
 
   const clearAllRecords = useCallback(() => {
+    for (const c of clients) {
+      enqueueOp('DELETE_CLIENT', c.id);
+    }
     setClients([]);
     setTransactions([]);
-    setPendingOps([]);
     pushToast('Cleared all clients and ledger entries', 'info');
-  }, [pushToast]);
+  }, [clients, enqueueOp, pushToast]);
+
+  const logoutAndClear = useCallback(async () => {
+    signingOutRef.current = true;
+    setClients([]);
+    setTransactions([]);
+    setProducts([]);
+    setPendingOps([]);
+    await signOut();
+  }, [signOut]);
 
   return (
     <DeniBookContext.Provider
@@ -878,8 +965,8 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         pendingOpsCount: pendingOps.length,
         isOnline,
         isSyncing,
+        isInitialLoading,
         isLocked,
-        session,
         toasts,
         kpis,
         unlockWithPin,
@@ -900,6 +987,7 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         resetDemoData,
         clearAllRecords,
         syncNow,
+        logoutAndClear,
       }}
     >
       {children}

@@ -5,6 +5,7 @@ import {
   Download,
   KeyRound,
   Lock,
+  LogOut,
   Moon,
   Plus,
   RotateCcw,
@@ -12,17 +13,18 @@ import {
   Sun,
   Trash2,
 } from 'lucide-react';
+import { useAuth } from '../lib/auth';
 import { formatNumber } from '../lib/currency';
 import { DEFAULT_WHATSAPP_TEMPLATE } from '../lib/phone';
 import { useDeniBook } from '../lib/store';
-import { isSupabaseConfigured, supabase } from '../lib/supabase';
+import { isSupabaseConfigured } from '../lib/supabase';
 import { PWAInstallButton } from './PWAInstallButton';
 
 export const ProductSettings: React.FC = () => {
+  const { user, profile } = useAuth();
   const {
     products,
     settings,
-    session,
     isSyncing,
     syncNow,
     upsertProduct,
@@ -33,6 +35,7 @@ export const ProductSettings: React.FC = () => {
     resetDemoData,
     clearAllRecords,
     lockApp,
+    logoutAndClear,
     pushToast,
   } = useDeniBook();
 
@@ -43,8 +46,7 @@ export const ProductSettings: React.FC = () => {
   const [editPrice, setEditPrice] = useState('');
 
   const [pinDraft, setPinDraft] = useState(settings.pinCode);
-  const [magicEmail, setMagicEmail] = useState('');
-  const [magicSending, setMagicSending] = useState(false);
+  const [shopNameDraft, setShopNameDraft] = useState(profile?.shop_name || settings.shopName);
   const [confirmAction, setConfirmAction] = useState<'reset' | 'clear' | null>(null);
 
   const handleAddProduct = (e: React.FormEvent) => {
@@ -84,29 +86,13 @@ export const ProductSettings: React.FC = () => {
     pushToast('Owner PIN updated');
   };
 
-  const handleMagicLink = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!supabase || !magicEmail.trim()) return;
-    setMagicSending(true);
-    try {
-      const { error } = await supabase.auth.signInWithOtp({
-        email: magicEmail.trim(),
-        options: { emailRedirectTo: window.location.origin },
-      });
-      if (error) throw error;
-      pushToast('Magic link sent to your email');
-      setMagicEmail('');
-    } catch {
-      pushToast('Failed to send magic link', 'error');
-    } finally {
-      setMagicSending(false);
+  const handleSaveShopName = () => {
+    if (!shopNameDraft.trim()) {
+      pushToast('Shop name cannot be empty', 'error');
+      return;
     }
-  };
-
-  const handleSignOut = async () => {
-    if (!supabase) return;
-    await supabase.auth.signOut();
-    pushToast('Signed out of Supabase', 'info');
+    updateSettings({ shopName: shopNameDraft.trim() });
+    pushToast('Shop name updated');
   };
 
   return (
@@ -271,6 +257,31 @@ export const ProductSettings: React.FC = () => {
           <h2 className="text-base font-bold text-stone-900 dark:text-stone-50">
             Shop &amp; WhatsApp Preferences
           </h2>
+
+          <div className="flex items-end gap-2">
+            <div className="flex-1">
+              <label
+                htmlFor="shop-name-input"
+                className="block text-xs font-semibold text-stone-600 dark:text-stone-300"
+              >
+                Shop / Business Name
+              </label>
+              <input
+                id="shop-name-input"
+                type="text"
+                value={shopNameDraft}
+                onChange={(e) => setShopNameDraft(e.target.value)}
+                className="mt-1 w-full min-h-[44px] rounded-xl border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-stone-900 px-3 text-sm text-stone-900 dark:text-stone-100"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={handleSaveShopName}
+              className="min-h-[44px] px-4 rounded-xl bg-stone-900 dark:bg-stone-100 text-white dark:text-stone-950 text-sm font-semibold whitespace-nowrap shrink-0"
+            >
+              Save
+            </button>
+          </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -454,65 +465,41 @@ export const ProductSettings: React.FC = () => {
           </div>
         </section>
 
-        {/* 4. Cloud Sync, Install & Data Backup */}
+        {/* 4. Account, Cloud Sync & App Backup */}
         <section className="rounded-2xl bg-white dark:bg-[#131917] border border-stone-200 dark:border-[#222B28] p-5 sm:p-6 space-y-4">
           <div className="flex items-center gap-2.5">
             <Cloud className="w-5 h-5 text-teal-700 dark:text-teal-400" />
-            <div>
+            <div className="min-w-0">
               <h2 className="text-base font-bold text-stone-900 dark:text-stone-50">
-                Cloud Sync &amp; App Backup
+                Account &amp; Cloud Sync
               </h2>
-              <p className="text-xs text-stone-500 dark:text-stone-400">
-                {isSupabaseConfigured
-                  ? session
-                    ? `Signed in as ${session.user.email || 'Owner'}`
-                    : 'Supabase configured · Sign in to sync across devices'
-                  : 'Running in offline-first local storage mode'}
+              <p className="text-xs text-stone-500 dark:text-stone-400 truncate">
+                Signed in as {user?.email || 'Owner'} ·{' '}
+                {isSupabaseConfigured ? 'Supabase Cloud Sync active' : 'Local Multi-Tenant Storage'}
               </p>
             </div>
           </div>
 
-          {isSupabaseConfigured && (
-            <div>
-              {session ? (
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    disabled={isSyncing}
-                    onClick={syncNow}
-                    className="min-h-[44px] px-4 rounded-xl bg-teal-700 hover:bg-teal-800 disabled:opacity-50 text-white text-sm font-semibold"
-                  >
-                    {isSyncing ? 'Syncing...' : 'Sync DB Now'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleSignOut}
-                    className="min-h-[44px] px-4 rounded-xl border border-stone-300 dark:border-stone-700 text-sm font-semibold text-stone-700 dark:text-stone-200"
-                  >
-                    Sign Out
-                  </button>
-                </div>
-              ) : (
-                <form onSubmit={handleMagicLink} className="flex gap-2">
-                  <input
-                    type="email"
-                    required
-                    value={magicEmail}
-                    onChange={(e) => setMagicEmail(e.target.value)}
-                    placeholder="owner@shop.com (Magic Link)"
-                    className="flex-1 min-h-[44px] rounded-xl border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-stone-900 px-3 text-sm text-stone-900 dark:text-stone-100"
-                  />
-                  <button
-                    type="submit"
-                    disabled={magicSending}
-                    className="min-h-[44px] px-4 rounded-xl bg-teal-700 text-white text-sm font-semibold whitespace-nowrap shrink-0"
-                  >
-                    {magicSending ? 'Sending...' : 'Send Link'}
-                  </button>
-                </form>
-              )}
-            </div>
-          )}
+          <div className="flex flex-wrap items-center gap-2">
+            {isSupabaseConfigured && (
+              <button
+                type="button"
+                disabled={isSyncing}
+                onClick={syncNow}
+                className="min-h-[44px] px-4 rounded-xl bg-teal-700 hover:bg-teal-800 disabled:opacity-50 text-white text-sm font-semibold"
+              >
+                {isSyncing ? 'Syncing...' : 'Sync DB Now'}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={logoutAndClear}
+              className="min-h-[44px] px-4 rounded-xl border border-stone-300 dark:border-stone-700 text-sm font-semibold text-stone-700 dark:text-stone-200 flex items-center gap-2 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200 dark:hover:bg-rose-950/30 dark:hover:text-rose-300 transition-colors"
+            >
+              <LogOut className="w-4 h-4" />
+              <span>Sign Out / Switch Account</span>
+            </button>
+          </div>
 
           <PWAInstallButton variant="full" />
 
