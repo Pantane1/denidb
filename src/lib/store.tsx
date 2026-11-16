@@ -271,6 +271,8 @@ interface DeniBookContextValue {
     productName: string;
     quantity: number;
     totalAmount: number;
+    discountAmount?: number;
+    depositAmount?: number;
     note?: string;
   }) => Promise<void>;
   recordPayment: (params: {
@@ -484,7 +486,7 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   }, [isOnline, pendingOps, session]);
 
   useEffect(() => {
-    if (isOnline && session && pendingOps.length > 0) {
+    if (isOnline && session) {
       syncNow();
     }
   }, [isOnline, session, pendingOps.length, syncNow]);
@@ -568,40 +570,81 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       productName,
       quantity,
       totalAmount,
+      discountAmount = 0,
+      depositAmount = 0,
       note,
     }: {
       clientIds: string[];
       productName: string;
       quantity: number;
       totalAmount: number;
+      discountAmount?: number;
+      depositAmount?: number;
       note?: string;
     }) => {
       if (clientIds.length === 0 || totalAmount <= 0) return;
 
-      const splitCount = clientIds.length;
-      const shares = splitAmountEvenly(totalAmount, splitCount);
-      const now = new Date().toISOString();
+      const discount = roundCurrency(Math.min(totalAmount, Math.max(0, discountAmount)));
+      const netSale = roundCurrency(totalAmount - discount);
+      if (netSale <= 0) return;
 
-      const newTransactions: LedgerTransaction[] = clientIds.map((clientId, idx) => ({
+      const deposit = roundCurrency(Math.min(netSale, Math.max(0, depositAmount)));
+      const netDebtAdded = roundCurrency(netSale - deposit);
+
+      const splitCount = clientIds.length;
+      const debtShares = splitAmountEvenly(netSale, splitCount);
+      const depositShares = deposit > 0 ? splitAmountEvenly(deposit, splitCount) : [];
+
+      const baseMs = Date.now();
+      const debtTime = new Date(baseMs).toISOString();
+      const depositTime = new Date(baseMs + 10).toISOString();
+
+      const noteParts: string[] = [];
+      if (splitCount > 1) noteParts.push(`Split ${splitCount} ways`);
+      if (discount > 0) noteParts.push(`Disc ${settings.currency} ${discount}`);
+      if (note?.trim()) noteParts.push(note.trim());
+      const combinedNote = noteParts.length > 0 ? noteParts.join(' · ') : undefined;
+
+      const debtTransactions: LedgerTransaction[] = clientIds.map((clientId, idx) => ({
         id: uuid(),
         client_id: clientId,
         type: TransactionType.DEBT,
         product_name: productName,
         quantity,
         split_count: splitCount,
-        amount: shares[idx],
-        note: note || (splitCount > 1 ? `Split ${splitCount} ways` : undefined),
-        created_at: now,
+        amount: debtShares[idx],
+        note: combinedNote,
+        created_at: debtTime,
         pending_sync: Boolean(isSupabaseConfigured),
       }));
 
+      const depositTransactions: LedgerTransaction[] =
+        deposit > 0
+          ? clientIds
+              .map((clientId, idx) => ({
+                id: uuid(),
+                client_id: clientId,
+                type: TransactionType.PAYMENT,
+                product_name: 'Deposit',
+                quantity: 1,
+                split_count: splitCount,
+                amount: depositShares[idx],
+                note: splitCount > 1 ? `Deposit at sale (Split ${splitCount} ways)` : 'Deposit at sale',
+                created_at: depositTime,
+                pending_sync: Boolean(isSupabaseConfigured),
+              }))
+              .filter((t) => t.amount > 0)
+          : [];
+
+      const allNewTransactions = [...depositTransactions, ...debtTransactions];
+
       setTransactions((prevTx) => {
-        const nextTx = [...newTransactions, ...prevTx];
+        const nextTx = [...allNewTransactions, ...prevTx];
         setClients((prevClients) => recomputeBalances(prevClients, nextTx));
         return nextTx;
       });
 
-      enqueueOp('ADD_TRANSACTIONS', newTransactions);
+      enqueueOp('ADD_TRANSACTIONS', [...debtTransactions, ...depositTransactions]);
       triggerHaptic(18);
 
       const names = clients
@@ -612,12 +655,24 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           ? names.join(' & ')
           : `${names[0]} & ${names.length - 1} others`;
 
-      const perShare = shares[0];
-      pushToast(
-        splitCount > 1
-          ? `Saved ${settings.currency} ${perShare} each to ${nameSummary}`
-          : `Saved ${settings.currency} ${totalAmount} to ${nameSummary}`
-      );
+      const perClientNetDebt = roundCurrency(netDebtAdded / splitCount);
+      if (deposit > 0 || discount > 0) {
+        pushToast(
+          splitCount > 1
+            ? `Saved ${settings.currency} ${perClientNetDebt} debt each (${
+                deposit > 0 ? `Depo ${deposit}` : ''
+              }${deposit > 0 && discount > 0 ? ', ' : ''}${
+                discount > 0 ? `Disc ${discount}` : ''
+              }) to ${nameSummary}`
+            : `Saved ${settings.currency} ${netDebtAdded} debt to ${nameSummary}`
+        );
+      } else {
+        pushToast(
+          splitCount > 1
+            ? `Saved ${settings.currency} ${debtShares[0]} each to ${nameSummary}`
+            : `Saved ${settings.currency} ${netSale} to ${nameSummary}`
+        );
+      }
     },
     [clients, enqueueOp, pushToast, settings.currency]
   );

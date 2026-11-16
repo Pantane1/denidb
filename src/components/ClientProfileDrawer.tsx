@@ -185,9 +185,11 @@ export const ClientProfileDrawer: React.FC<ClientProfileDrawerProps> = ({
                   const isDebt = entry.type === TransactionType.DEBT;
                   const description = isDebt
                     ? `${entry.quantity}x ${entry.product_name}${
-                        entry.split_count > 1 ? ` (Split ${entry.split_count} ways)` : ''
+                        entry.note ? ` · ${entry.note}` : ''
                       }`
-                    : `Payment${entry.note ? ` · ${entry.note}` : ''}`;
+                    : `${entry.product_name === 'Deposit' ? 'Deposit Paid' : 'Payment'}${
+                        entry.note ? ` · ${entry.note}` : ''
+                      }`;
 
                   return (
                     <li

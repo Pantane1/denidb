@@ -23,6 +23,8 @@ export const ProductSettings: React.FC = () => {
     products,
     settings,
     session,
+    isSyncing,
+    syncNow,
     upsertProduct,
     deleteProduct,
     setDefaultProduct,
@@ -473,13 +475,23 @@ export const ProductSettings: React.FC = () => {
           {isSupabaseConfigured && (
             <div>
               {session ? (
-                <button
-                  type="button"
-                  onClick={handleSignOut}
-                  className="min-h-[44px] px-4 rounded-xl border border-stone-300 dark:border-stone-700 text-sm font-semibold text-stone-700 dark:text-stone-200"
-                >
-                  Sign Out of Supabase
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={isSyncing}
+                    onClick={syncNow}
+                    className="min-h-[44px] px-4 rounded-xl bg-teal-700 hover:bg-teal-800 disabled:opacity-50 text-white text-sm font-semibold"
+                  >
+                    {isSyncing ? 'Syncing...' : 'Sync DB Now'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSignOut}
+                    className="min-h-[44px] px-4 rounded-xl border border-stone-300 dark:border-stone-700 text-sm font-semibold text-stone-700 dark:text-stone-200"
+                  >
+                    Sign Out
+                  </button>
+                </div>
               ) : (
                 <form onSubmit={handleMagicLink} className="flex gap-2">
                   <input

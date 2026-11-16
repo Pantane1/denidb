@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Check, Minus, Plus, RotateCcw, Users, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, Minus, Plus, RotateCcw, Tag, Users, X } from 'lucide-react';
 import { Client } from '../types';
-import { formatCurrency, formatNumber, splitAmountEvenly } from '../lib/currency';
+import { formatCurrency, formatNumber, roundCurrency, splitAmountEvenly } from '../lib/currency';
 import { triggerHaptic, useDeniBook } from '../lib/store';
 
 interface TapCounterBarProps {
@@ -25,6 +25,9 @@ export const TapCounterBar: React.FC<TapCounterBarProps> = ({
   const [quantity, setQuantity] = useState<number>(1);
   const [customAmount, setCustomAmount] = useState<string>('');
   const [customLabel, setCustomLabel] = useState<string>('Custom Item');
+  const [showAdjustments, setShowAdjustments] = useState<boolean>(false);
+  const [discountInput, setDiscountInput] = useState<string>('');
+  const [depositInput, setDepositInput] = useState<string>('');
   const [isSaving, setIsSaving] = useState<boolean>(false);
 
   // Keep selected product valid if catalog changes
@@ -43,13 +46,20 @@ export const TapCounterBar: React.FC<TapCounterBarProps> = ({
   const isCustomMode = selectedProductId === 'custom';
   const activeProduct = products.find((p) => p.id === selectedProductId) || defaultProduct;
 
-  const totalAmount = isCustomMode
+  const grossTotal = isCustomMode
     ? Math.max(0, Number(customAmount) || 0)
-    : quantity * (activeProduct?.unit_price || 0);
+    : roundCurrency(quantity * (activeProduct?.unit_price || 0));
+
+  const discountVal = roundCurrency(Math.min(grossTotal, Math.max(0, Number(discountInput) || 0)));
+  const netAfterDiscount = roundCurrency(Math.max(0, grossTotal - discountVal));
+  const depositVal = roundCurrency(
+    Math.min(netAfterDiscount, Math.max(0, Number(depositInput) || 0))
+  );
+  const remainingDebt = roundCurrency(Math.max(0, netAfterDiscount - depositVal));
 
   const splitCount = selectedClients.length;
-  const shares = splitAmountEvenly(totalAmount, splitCount);
-  const uniqueShares = Array.from(new Set(shares));
+  const remainingShares = splitAmountEvenly(remainingDebt, splitCount);
+  const uniqueRemainingShares = Array.from(new Set(remainingShares));
 
   const clientNamesDisplay =
     selectedClients.length <= 2
@@ -75,25 +85,34 @@ export const TapCounterBar: React.FC<TapCounterBarProps> = ({
     } else {
       setQuantity(1);
     }
+    setDiscountInput('');
+    setDepositInput('');
   };
 
   const handleSave = async () => {
-    if (isSaving || totalAmount <= 0) return;
+    if (isSaving || netAfterDiscount <= 0) return;
     setIsSaving(true);
     try {
       await saveDebtSale({
         clientIds: selectedClients.map((c) => c.id),
         productName: isCustomMode ? customLabel.trim() || 'Custom' : activeProduct?.name || 'Item',
         quantity: isCustomMode ? 1 : quantity,
-        totalAmount,
+        totalAmount: grossTotal,
+        discountAmount: discountVal,
+        depositAmount: depositVal,
       });
       setQuantity(1);
       setCustomAmount('');
+      setDiscountInput('');
+      setDepositInput('');
+      setShowAdjustments(false);
       onClearSelection();
     } finally {
       setIsSaving(false);
     }
   };
+
+  const hasAdjustments = discountVal > 0 || depositVal > 0;
 
   return (
     <div
@@ -102,7 +121,7 @@ export const TapCounterBar: React.FC<TapCounterBarProps> = ({
       aria-label="Quick Sale Tap Counter"
     >
       <div className="max-w-3xl mx-auto pointer-events-auto rounded-2xl bg-white dark:bg-[#131917] border border-stone-200 dark:border-[#26322E] shadow-2xl p-3.5 sm:p-4">
-        {/* Top Row: Selected Clients + Split Badge + Close */}
+        {/* Top Row: Selected Clients + Discount/Deposit Toggle + Close */}
         <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-stone-100 dark:border-[#1E2724]">
           <div className="flex items-center gap-2 min-w-0">
             <Users className="w-4 h-4 text-teal-700 dark:text-teal-400 shrink-0" />
@@ -113,14 +132,42 @@ export const TapCounterBar: React.FC<TapCounterBarProps> = ({
             </span>
           </div>
 
-          <button
-            type="button"
-            onClick={onClearSelection}
-            aria-label="Clear selection"
-            className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg text-stone-500 hover:bg-stone-100 dark:hover:bg-stone-800 shrink-0"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                triggerHaptic(8);
+                setShowAdjustments((v) => !v);
+              }}
+              aria-expanded={showAdjustments}
+              className={`min-h-[36px] px-2.5 rounded-lg text-xs font-semibold flex items-center gap-1 border transition-colors whitespace-nowrap ${
+                showAdjustments || hasAdjustments
+                  ? 'bg-amber-50 dark:bg-amber-950/40 border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-300'
+                  : 'bg-stone-50 dark:bg-stone-900 border-stone-200 dark:border-stone-700 text-stone-700 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800'
+              }`}
+            >
+              <Tag className="w-3.5 h-3.5" />
+              <span>
+                {hasAdjustments
+                  ? `Disc ${formatNumber(discountVal)} · Depo ${formatNumber(depositVal)}`
+                  : 'Discount / Depo'}
+              </span>
+              {showAdjustments ? (
+                <ChevronDown className="w-3.5 h-3.5" />
+              ) : (
+                <ChevronUp className="w-3.5 h-3.5" />
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={onClearSelection}
+              aria-label="Clear selection"
+              className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg text-stone-500 hover:bg-stone-100 dark:hover:bg-stone-800 shrink-0"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {/* Product Switcher */}
@@ -205,12 +252,10 @@ export const TapCounterBar: React.FC<TapCounterBarProps> = ({
             >
               <span className="flex items-center gap-2 text-sm sm:text-base">
                 <Plus className="w-5 h-5" />
-                <span>
-                  Tap {activeProduct?.name} (+1)
-                </span>
+                <span>Tap {activeProduct?.name} (+1)</span>
               </span>
               <span className="font-mono-num text-lg sm:text-xl font-bold">
-                {quantity}x = {formatNumber(totalAmount)}
+                {quantity}x = {formatNumber(grossTotal)}
               </span>
             </button>
 
@@ -226,20 +271,98 @@ export const TapCounterBar: React.FC<TapCounterBarProps> = ({
           </div>
         )}
 
+        {/* Expandable Discount & Deposit Inputs */}
+        {showAdjustments && (
+          <div className="mt-3 pt-3 border-t border-stone-100 dark:border-[#1E2724] grid grid-cols-2 gap-2.5">
+            <div>
+              <label
+                htmlFor="cart-discount-input"
+                className="block text-[11px] font-semibold text-stone-600 dark:text-stone-300"
+              >
+                Discount Allowed ({settings.currency})
+              </label>
+              <input
+                id="cart-discount-input"
+                type="number"
+                inputMode="decimal"
+                min="0"
+                max={grossTotal || undefined}
+                step="any"
+                value={discountInput}
+                onChange={(e) => setDiscountInput(e.target.value)}
+                placeholder="0"
+                className="mt-1 w-full min-h-[44px] rounded-xl border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-stone-900 px-3 text-sm font-mono-num font-bold text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-teal-600"
+              />
+            </div>
+
+            <div>
+              <label
+                htmlFor="cart-deposit-input"
+                className="block text-[11px] font-semibold text-stone-600 dark:text-stone-300"
+              >
+                Deposit Paid Now ({settings.currency})
+              </label>
+              <input
+                id="cart-deposit-input"
+                type="number"
+                inputMode="decimal"
+                min="0"
+                max={netAfterDiscount || undefined}
+                step="any"
+                value={depositInput}
+                onChange={(e) => setDepositInput(e.target.value)}
+                placeholder="0"
+                className="mt-1 w-full min-h-[44px] rounded-xl border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-stone-900 px-3 text-sm font-mono-num font-bold text-emerald-700 dark:text-emerald-400 focus:outline-none focus:ring-2 focus:ring-teal-600"
+              />
+            </div>
+          </div>
+        )}
+
         {/* Live Split Preview + Save Debt CTA */}
         <div className="mt-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
           <div className="text-xs sm:text-sm text-stone-600 dark:text-stone-300 min-w-0">
-            {splitCount > 1 ? (
+            {hasAdjustments ? (
+              <p className="font-medium truncate">
+                {discountVal > 0 && (
+                  <span>
+                    Net <strong className="font-mono-num">{formatNumber(netAfterDiscount)}</strong>{' '}
+                    (Disc {formatNumber(discountVal)}) ·{' '}
+                  </span>
+                )}
+                {depositVal > 0 && (
+                  <span className="text-emerald-700 dark:text-emerald-400">
+                    Depo <strong className="font-mono-num">{formatNumber(depositVal)}</strong> ·{' '}
+                  </span>
+                )}
+                Debt:{' '}
+                <strong className="font-mono-num text-stone-900 dark:text-stone-50">
+                  {formatCurrency(remainingDebt, settings.currency)}
+                </strong>
+                {splitCount > 1 && remainingDebt > 0 && (
+                  <span className="text-teal-700 dark:text-teal-400 font-semibold">
+                    {' '}
+                    →{' '}
+                    {uniqueRemainingShares.length === 1
+                      ? `${formatNumber(remainingShares[0])} each`
+                      : `${formatNumber(Math.min(...remainingShares))}–${formatNumber(
+                          Math.max(...remainingShares)
+                        )} each`}
+                  </span>
+                )}
+              </p>
+            ) : splitCount > 1 ? (
               <p className="font-medium truncate">
                 Total:{' '}
                 <strong className="font-mono-num text-stone-900 dark:text-stone-50">
-                  {formatCurrency(totalAmount, settings.currency)}
+                  {formatCurrency(grossTotal, settings.currency)}
                 </strong>{' '}
                 →{' '}
                 <strong className="font-mono-num text-teal-700 dark:text-teal-400">
-                  {uniqueShares.length === 1
-                    ? `${formatNumber(shares[0])} each`
-                    : `${formatNumber(Math.min(...shares))}–${formatNumber(Math.max(...shares))} each`}
+                  {uniqueRemainingShares.length === 1
+                    ? `${formatNumber(remainingShares[0])} each`
+                    : `${formatNumber(Math.min(...remainingShares))}–${formatNumber(
+                        Math.max(...remainingShares)
+                      )} each`}
                 </strong>{' '}
                 <span className="text-stone-500 dark:text-stone-400">({clientNamesDisplay})</span>
               </p>
@@ -247,7 +370,7 @@ export const TapCounterBar: React.FC<TapCounterBarProps> = ({
               <p className="font-medium truncate">
                 Adding{' '}
                 <strong className="font-mono-num text-stone-900 dark:text-stone-50">
-                  {formatCurrency(totalAmount, settings.currency)}
+                  {formatCurrency(remainingDebt, settings.currency)}
                 </strong>{' '}
                 to {selectedClients[0].name}
               </p>
@@ -256,12 +379,20 @@ export const TapCounterBar: React.FC<TapCounterBarProps> = ({
 
           <button
             type="button"
-            disabled={isSaving || totalAmount <= 0}
+            disabled={isSaving || netAfterDiscount <= 0}
             onClick={handleSave}
             className="w-full sm:w-auto min-h-[48px] px-6 rounded-xl bg-teal-700 hover:bg-teal-800 disabled:opacity-40 text-white text-sm sm:text-base font-bold flex items-center justify-center gap-2 active:scale-[0.98] transition-all whitespace-nowrap shrink-0"
           >
             <Check className="w-5 h-5" />
-            <span>{isSaving ? 'Saving...' : 'Save Debt'}</span>
+            <span>
+              {isSaving
+                ? 'Saving...'
+                : remainingDebt === 0 && depositVal > 0
+                  ? 'Save Paid Sale'
+                  : hasAdjustments
+                    ? `Save Debt (${formatNumber(remainingDebt)})`
+                    : 'Save Debt'}
+            </span>
           </button>
         </div>
       </div>
