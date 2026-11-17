@@ -1,13 +1,14 @@
-import React, { useState } from 'react';
-import { Phone, ShieldAlert, UserPlus, X } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { ArrowRight, Phone, ShieldAlert, UserPlus, X } from 'lucide-react';
 import { Client } from '../types';
-import { formatPhoneDisplay, isValidWhatsAppNumber, sanitizeWhatsAppNumber } from '../lib/phone';
+import { formatPhoneDisplay, isValidWhatsAppNumber, normalizePhoneNumber } from '../lib/phone';
 import { useDeniBook } from '../lib/store';
 
 interface AddClientModalProps {
   existingClient?: Client | null;
   onClose: () => void;
   onSaved?: (client: Client) => void;
+  onOpenExistingClient?: (client: Client) => void;
 }
 
 const LIMIT_PRESETS = [500, 1000, 2000];
@@ -16,18 +17,25 @@ export const AddClientModal: React.FC<AddClientModalProps> = ({
   existingClient,
   onClose,
   onSaved,
+  onOpenExistingClient,
 }) => {
-  const { addClient, updateClient, settings } = useDeniBook();
+  const { addClient, updateClient, findDuplicateClientByPhone, pushToast, settings } = useDeniBook();
   const [name, setName] = useState(existingClient?.name ?? '');
   const [phone, setPhone] = useState(existingClient?.whatsapp_number ?? '');
   const [creditLimitInput, setCreditLimitInput] = useState(
     existingClient?.credit_limit ? String(existingClient.credit_limit) : ''
   );
   const [error, setError] = useState('');
+  const [duplicateClient, setDuplicateClient] = useState<Client | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const sanitized = sanitizeWhatsAppNumber(phone, settings.countryCode);
+  const sanitized = normalizePhoneNumber(phone, settings.countryCode);
   const validPhone = isValidWhatsAppNumber(phone, settings.countryCode);
+
+  const liveDuplicate = useMemo(
+    () => (validPhone ? findDuplicateClientByPhone(sanitized, existingClient?.id) : null),
+    [existingClient?.id, findDuplicateClientByPhone, sanitized, validPhone]
+  );
 
   const parsedLimit = creditLimitInput.trim() === '' ? null : Number(creditLimitInput);
 
@@ -36,24 +44,37 @@ export const AddClientModal: React.FC<AddClientModalProps> = ({
     if (submitting) return;
     if (!name.trim()) {
       setError('Please enter the customer name.');
+      setDuplicateClient(null);
       return;
     }
     if (!validPhone) {
       setError('Enter a valid phone number (e.g. 0712345678).');
+      setDuplicateClient(null);
       return;
     }
+
+    const match = findDuplicateClientByPhone(sanitized, existingClient?.id);
+    if (match) {
+      const dupMsg = `This WhatsApp number is already registered to ${match.name}. Open their profile instead.`;
+      setDuplicateClient(match);
+      setError(dupMsg);
+      pushToast(dupMsg, 'error');
+      return;
+    }
+
     if (parsedLimit !== null && (Number.isNaN(parsedLimit) || parsedLimit <= 0)) {
       setError('Credit limit must be greater than 0, or leave blank for unlimited.');
+      setDuplicateClient(null);
       return;
     }
 
     setSubmitting(true);
     try {
       if (existingClient) {
-        const ok = await updateClient(existingClient.id, name, phone, parsedLimit);
+        const ok = await updateClient(existingClient.id, name, sanitized, parsedLimit);
         if (ok) onClose();
       } else {
-        const created = await addClient(name, phone, parsedLimit);
+        const created = await addClient(name, sanitized, parsedLimit);
         if (created) {
           onSaved?.(created);
           onClose();
@@ -136,6 +157,7 @@ export const AddClientModal: React.FC<AddClientModalProps> = ({
                 onChange={(e) => {
                   setPhone(e.target.value);
                   setError('');
+                  setDuplicateClient(null);
                 }}
                 placeholder="0712 345 678"
                 className="w-full min-h-[48px] rounded-xl border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-stone-900 pl-10 pr-3.5 text-base font-mono-num text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-teal-600"
@@ -145,6 +167,11 @@ export const AddClientModal: React.FC<AddClientModalProps> = ({
               <p className="mt-1.5 text-xs text-stone-500 dark:text-stone-400 font-mono-num">
                 WhatsApp link preview: {formatPhoneDisplay(sanitized)}{' '}
                 {validPhone ? '· Valid' : '· Keep typing'}
+              </p>
+            )}
+            {!error && liveDuplicate && (
+              <p className="mt-1.5 text-xs font-medium text-amber-700 dark:text-amber-400">
+                This WhatsApp number is already registered to {liveDuplicate.name}. Open their profile instead.
               </p>
             )}
           </div>
@@ -203,7 +230,28 @@ export const AddClientModal: React.FC<AddClientModalProps> = ({
           </div>
 
           {error && (
-            <p className="text-xs font-medium text-rose-600 dark:text-rose-400">{error}</p>
+            <div
+              role="alert"
+              className="rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/60 px-3.5 py-2.5 space-y-2"
+            >
+              <p className="text-xs font-medium text-rose-700 dark:text-rose-300">{error}</p>
+              {(duplicateClient || liveDuplicate) && onOpenExistingClient && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = duplicateClient || liveDuplicate;
+                    if (target) {
+                      onOpenExistingClient(target);
+                      onClose();
+                    }
+                  }}
+                  className="inline-flex items-center gap-1 text-xs font-bold text-teal-700 dark:text-teal-300 hover:underline"
+                >
+                  <span>Open {(duplicateClient || liveDuplicate)?.name}&apos;s profile</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
           )}
 
           <div className="pt-1 flex items-center gap-2.5">

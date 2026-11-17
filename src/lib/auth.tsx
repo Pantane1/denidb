@@ -16,6 +16,7 @@ interface LocalAccountRecord {
 interface AuthResult {
   error?: string;
   needsEmailConfirmation?: boolean;
+  duplicateEmail?: boolean;
 }
 
 interface AuthContextValue {
@@ -223,6 +224,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     async (email: string, password: string, shopName: string): Promise<AuthResult> => {
       const cleanEmail = email.trim().toLowerCase();
       const cleanShop = shopName.trim() || 'My Shop';
+      const duplicateMessage =
+        "An account with this email already exists. Please sign in or use 'Forgot password?' to reset your password.";
 
       if (isSupabaseConfigured && supabase) {
         const { data, error } = await supabase.auth.signUp({
@@ -235,7 +238,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           },
         });
         if (error) {
+          if (/already registered|user already registered|already exists/i.test(error.message)) {
+            return { error: duplicateMessage, duplicateEmail: true };
+          }
           return { error: error.message };
+        }
+        if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+          return { error: duplicateMessage, duplicateEmail: true };
         }
         if (data.session) {
           setSession(data.session);
@@ -247,7 +256,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       const accounts = readLocalAccounts();
       if (accounts.some((a) => a.email.toLowerCase() === cleanEmail)) {
-        return { error: 'An account with this email already exists.' };
+        return { error: duplicateMessage, duplicateEmail: true };
       }
       const newId =
         typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'

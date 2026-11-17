@@ -25,11 +25,13 @@ import { WhatsAppNotifierModal } from './WhatsAppNotifier';
 interface ClientProfileDrawerProps {
   clientId: string;
   onClose: () => void;
+  onSelectClient?: (clientId: string) => void;
 }
 
 export const ClientProfileDrawer: React.FC<ClientProfileDrawerProps> = ({
   clientId,
   onClose,
+  onSelectClient,
 }) => {
   const { clients, transactions, settings, voidTransaction, deleteClient } = useDeniBook();
   const [showPayment, setShowPayment] = useState(false);
@@ -298,6 +300,9 @@ export const ClientProfileDrawer: React.FC<ClientProfileDrawerProps> = ({
         <AddClientModal
           existingClient={client}
           onClose={() => setShowEditClient(false)}
+          onOpenExistingClient={
+            onSelectClient ? (existing) => onSelectClient(existing.id) : undefined
+          }
         />
       )}
 

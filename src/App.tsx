@@ -239,6 +239,7 @@ const DeniBookShell: React.FC = () => {
           <ClientProfileDrawer
             clientId={profileClientId}
             onClose={() => setProfileClientId(null)}
+            onSelectClient={(id) => setProfileClientId(id)}
           />
         </div>
       )}
@@ -250,6 +251,10 @@ const DeniBookShell: React.FC = () => {
           onSaved={(created) => {
             setActiveTab('ledger');
             setSelectedIds([created.id]);
+          }}
+          onOpenExistingClient={(existing) => {
+            setActiveTab('ledger');
+            setProfileClientId(existing.id);
           }}
         />
       )}

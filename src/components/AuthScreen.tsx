@@ -118,14 +118,24 @@ export const AuthScreen: React.FC = () => {
       }
     }
 
+    const normalizedEmail = email.trim().toLowerCase();
+    setEmail(normalizedEmail);
+
     setSubmitting(true);
     try {
       if (mode === 'signin') {
-        const res = await signIn(email, password);
+        const res = await signIn(normalizedEmail, password);
         if (res.error) setError(res.error);
       } else {
-        const res = await signUp(email, password, shopName);
-        if (res.error) {
+        const res = await signUp(normalizedEmail, password, shopName);
+        if (res.duplicateEmail) {
+          setMode('signin');
+          setInfoMessage('');
+          setError(
+            res.error ||
+              "An account with this email already exists. Please sign in or use 'Forgot password?' to reset your password."
+          );
+        } else if (res.error) {
           setError(res.error);
         } else if (res.needsEmailConfirmation) {
           setInfoMessage(
@@ -252,7 +262,7 @@ export const AuthScreen: React.FC = () => {
                       onClick={() => switchMode('forgot')}
                       className="text-xs font-semibold text-teal-700 dark:text-teal-400 hover:text-teal-800 dark:hover:text-teal-300 hover:underline transition-colors"
                     >
-                      Forgot password
+                      Forgot password?
                     </button>
                   )}
                 </div>

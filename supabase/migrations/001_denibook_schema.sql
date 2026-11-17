@@ -116,6 +116,7 @@ DROP INDEX IF EXISTS idx_transactions_owner_created;
 
 CREATE INDEX IF NOT EXISTS idx_clients_user_balance ON public.clients (user_id, total_balance DESC);
 CREATE INDEX IF NOT EXISTS idx_clients_name ON public.clients (name);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_clients_user_whatsapp_unique ON public.clients (user_id, whatsapp_number);
 CREATE INDEX IF NOT EXISTS idx_products_user ON public.products (user_id, created_at ASC);
 CREATE INDEX IF NOT EXISTS idx_transactions_user_created ON public.transactions (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_transactions_client_created ON public.transactions (client_id, created_at DESC);

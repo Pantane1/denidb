@@ -11,7 +11,7 @@ import {
 } from '../types';
 import { useAuth } from './auth';
 import { isSameLocalDay, roundCurrency, splitAmountEvenly } from './currency';
-import { DEFAULT_WHATSAPP_TEMPLATE, sanitizeWhatsAppNumber } from './phone';
+import { DEFAULT_WHATSAPP_TEMPLATE, normalizePhoneNumber } from './phone';
 import { isSupabaseConfigured, supabase } from './supabase';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 
@@ -71,6 +71,14 @@ function isNetworkFailure(err: unknown): boolean {
   return /failed to fetch|networkerror|network request failed|load failed|fetch|timeout|offline/i.test(
     msg
   );
+}
+
+function isUniqueViolationError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const code = 'code' in err ? String((err as { code?: unknown }).code ?? '') : '';
+  if (code === '23505') return true;
+  const msg = 'message' in err ? String((err as { message?: unknown }).message ?? '') : '';
+  return /duplicate key|unique constraint|23505/i.test(msg);
 }
 
 function createSampleData(): {
@@ -326,6 +334,7 @@ interface DeniBookContextValue {
   updateSettings: (patch: Partial<AppSettings>) => Promise<void>;
   pushToast: (message: string, tone?: ToastItem['tone']) => void;
   dismissToast: (id: string) => void;
+  findDuplicateClientByPhone: (rawPhone: string, excludeClientId?: string) => Client | null;
   addClient: (
     name: string,
     phone: string,
@@ -556,6 +565,7 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const uid = authData.user.id;
       const currentQueue = [...queueRef.current];
       const flushedCountInitial = currentQueue.length;
+      const droppedOpIds = new Set<string>();
       let failedIndex = -1;
 
       // Strict FIFO flush
@@ -569,7 +579,7 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                 id: c.id,
                 user_id: uid,
                 name: c.name,
-                whatsapp_number: c.whatsapp_number,
+                whatsapp_number: normalizePhoneNumber(c.whatsapp_number, settings.countryCode),
                 credit_limit: c.credit_limit ?? null,
                 created_at: c.created_at,
               },
@@ -582,7 +592,7 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
               .from('clients')
               .update({
                 name: p.name,
-                whatsapp_number: p.whatsapp_number,
+                whatsapp_number: normalizePhoneNumber(p.whatsapp_number, settings.countryCode),
                 credit_limit: p.credit_limit,
               })
               .eq('id', p.id)
@@ -609,6 +619,14 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             if (error) throw error;
           }
         } catch (err) {
+          if (
+            isUniqueViolationError(err) &&
+            (op.kind === 'CREATE_CLIENT' || op.kind === 'UPDATE_CLIENT')
+          ) {
+            droppedOpIds.add(op.id);
+            pushToast('A client with this WhatsApp number already exists in your book.', 'error');
+            continue;
+          }
           failedIndex = i;
           if (!isNetworkFailure(err)) {
             const msg =
@@ -621,18 +639,21 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         }
       }
 
-      const remainingQueue = failedIndex === -1 ? [] : currentQueue.slice(failedIndex);
+      const remainingQueue = (
+        failedIndex === -1 ? [] : currentQueue.slice(failedIndex)
+      ).filter((op) => !droppedOpIds.has(op.id));
       queueRef.current = remainingQueue;
       setOfflineQueue(remainingQueue);
       writeOfflineQueue(user.id, remainingQueue);
 
       if (failedIndex === -1) {
         await fetchAndHydrateFromSupabase([]);
-        if (flushedCountInitial > 0) {
+        const syncedOpsCount = flushedCountInitial - droppedOpIds.size;
+        if (syncedOpsCount > 0) {
           setJustSynced(true);
           pushToast(
-            `Synced ${flushedCountInitial} offline ${
-              flushedCountInitial === 1 ? 'change' : 'changes'
+            `Synced ${syncedOpsCount} offline ${
+              syncedOpsCount === 1 ? 'change' : 'changes'
             }`
           );
           window.setTimeout(() => setJustSynced(false), 2800);
@@ -643,7 +664,7 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       setIsSyncing(false);
       setIsInitialLoading(false);
     }
-  }, [fetchAndHydrateFromSupabase, isOnline, pushToast, user.id]);
+  }, [fetchAndHydrateFromSupabase, isOnline, pushToast, settings.countryCode, user.id]);
 
   // Flush FIFO queue & fetch user data on login, page reload, and online event
   useEffect(() => {
@@ -721,6 +742,53 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     [pushToast, updateProfile]
   );
 
+  const findDuplicateClientByPhone = useCallback(
+    (rawPhone: string, excludeClientId?: string): Client | null => {
+      const target = normalizePhoneNumber(rawPhone, settings.countryCode);
+      if (!target) return null;
+
+      const stateMatch = clientsRef.current.find(
+        (c) =>
+          c.id !== excludeClientId &&
+          normalizePhoneNumber(c.whatsapp_number, settings.countryCode) === target
+      );
+      if (stateMatch) return stateMatch;
+
+      for (const op of queueRef.current) {
+        if (op.kind === 'CREATE_CLIENT') {
+          if (
+            op.payload.id !== excludeClientId &&
+            normalizePhoneNumber(op.payload.whatsapp_number, settings.countryCode) === target
+          ) {
+            return op.payload;
+          }
+        } else if (op.kind === 'UPDATE_CLIENT') {
+          if (
+            op.payload.id !== excludeClientId &&
+            normalizePhoneNumber(op.payload.whatsapp_number, settings.countryCode) === target
+          ) {
+            const existing = clientsRef.current.find((c) => c.id === op.payload.id);
+            return (
+              existing ?? {
+                id: op.payload.id,
+                user_id: user.id,
+                name: op.payload.name,
+                whatsapp_number: op.payload.whatsapp_number,
+                credit_limit: op.payload.credit_limit,
+                total_balance: 0,
+                created_at: op.createdAt,
+                updated_at: op.payload.updated_at,
+              }
+            );
+          }
+        }
+      }
+
+      return null;
+    },
+    [settings.countryCode, user.id]
+  );
+
   const addClient = useCallback(
     async (
       name: string,
@@ -728,7 +796,16 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       creditLimit: number | null = null
     ): Promise<Client | null> => {
       const cleanName = name.trim();
-      const formattedPhone = sanitizeWhatsAppNumber(phone, settings.countryCode);
+      const formattedPhone = normalizePhoneNumber(phone, settings.countryCode);
+      const duplicate = findDuplicateClientByPhone(formattedPhone);
+      if (duplicate) {
+        pushToast(
+          `This WhatsApp number is already registered to ${duplicate.name}. Open their profile instead.`,
+          'error'
+        );
+        return null;
+      }
+
       const cleanLimit = creditLimit && creditLimit > 0 ? roundCurrency(creditLimit) : null;
       const now = new Date().toISOString();
       const newClientId = uuid();
@@ -774,6 +851,10 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             .single();
 
           if (error) {
+            if (isUniqueViolationError(error)) {
+              pushToast('A client with this WhatsApp number already exists in your book.', 'error');
+              return null;
+            }
             if (isNetworkFailure(error)) {
               enqueueOfflineOp({
                 id: uuid(),
@@ -794,6 +875,10 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           pushToast(`Added ${created.name}`);
           return created;
         } catch (err) {
+          if (isUniqueViolationError(err)) {
+            pushToast('A client with this WhatsApp number already exists in your book.', 'error');
+            return null;
+          }
           if (isNetworkFailure(err)) {
             enqueueOfflineOp({
               id: uuid(),
@@ -814,7 +899,15 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       pushToast(`Added ${optimisticClient.name}`);
       return optimisticClient;
     },
-    [enqueueOfflineOp, getAuthenticatedUserId, isOnline, pushToast, settings.countryCode, user.id]
+    [
+      enqueueOfflineOp,
+      findDuplicateClientByPhone,
+      getAuthenticatedUserId,
+      isOnline,
+      pushToast,
+      settings.countryCode,
+      user.id,
+    ]
   );
 
   const updateClient = useCallback(
@@ -825,7 +918,16 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       creditLimit: number | null = null
     ): Promise<boolean> => {
       const cleanName = name.trim();
-      const formatted = sanitizeWhatsAppNumber(phone, settings.countryCode);
+      const formatted = normalizePhoneNumber(phone, settings.countryCode);
+      const duplicate = findDuplicateClientByPhone(formatted, id);
+      if (duplicate) {
+        pushToast(
+          `This WhatsApp number is already registered to ${duplicate.name}. Open their profile instead.`,
+          'error'
+        );
+        return false;
+      }
+
       const cleanLimit = creditLimit && creditLimit > 0 ? roundCurrency(creditLimit) : null;
       const now = new Date().toISOString();
 
@@ -881,6 +983,10 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             .single();
 
           if (error) {
+            if (isUniqueViolationError(error)) {
+              pushToast('A client with this WhatsApp number already exists in your book.', 'error');
+              return false;
+            }
             if (isNetworkFailure(error)) {
               enqueueOfflineOp({
                 id: uuid(),
@@ -906,6 +1012,10 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           pushToast('Client details updated');
           return true;
         } catch (err) {
+          if (isUniqueViolationError(err)) {
+            pushToast('A client with this WhatsApp number already exists in your book.', 'error');
+            return false;
+          }
           if (isNetworkFailure(err)) {
             enqueueOfflineOp({
               id: uuid(),
@@ -932,7 +1042,14 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       pushToast('Client details updated');
       return true;
     },
-    [enqueueOfflineOp, getAuthenticatedUserId, isOnline, pushToast, settings.countryCode]
+    [
+      enqueueOfflineOp,
+      findDuplicateClientByPhone,
+      getAuthenticatedUserId,
+      isOnline,
+      pushToast,
+      settings.countryCode,
+    ]
   );
 
   const deleteClient = useCallback(
@@ -1700,6 +1817,7 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         updateSettings,
         pushToast,
         dismissToast,
+        findDuplicateClientByPhone,
         addClient,
         updateClient,
         deleteClient,

@@ -1,31 +1,41 @@
-export function sanitizeWhatsAppNumber(raw: string, defaultCountryCode = '254'): string {
-  const cleaned = raw.replace(/[^\d+]/g, '');
-  if (!cleaned) return '';
+export function normalizePhoneNumber(raw: string, defaultCountryCode = '254'): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+
+  const hadPlus = trimmed.startsWith('+');
+  const digitsOnly = trimmed.replace(/\D/g, '');
+  if (!digitsOnly) return '';
 
   const code = defaultCountryCode.replace(/\D/g, '') || '254';
 
-  if (cleaned.startsWith('+')) {
-    return cleaned.slice(1).replace(/\D/g, '');
+  if (hadPlus) {
+    return digitsOnly;
   }
 
-  if (cleaned.startsWith('00')) {
-    return cleaned.slice(2).replace(/\D/g, '');
+  if (digitsOnly.startsWith('00') && digitsOnly.length > 2) {
+    return digitsOnly.slice(2);
   }
 
-  if (cleaned.startsWith('0')) {
-    return `${code}${cleaned.slice(1).replace(/\D/g, '')}`;
+  // Convert local numbers starting with 0 (e.g. 07XXXXXXXX or 01XXXXXXXX) to country code format
+  if (digitsOnly.startsWith('0')) {
+    const subscriber = digitsOnly.slice(1);
+    return subscriber ? `${code}${subscriber}` : '';
   }
 
-  // If 9 digits like 712345678, prepend country code
-  if (cleaned.length === 9 && !cleaned.startsWith(code)) {
-    return `${code}${cleaned}`;
+  // If 9 digits like 712345678 or 112345678, prepend country code
+  if (digitsOnly.length === 9 && !digitsOnly.startsWith(code)) {
+    return `${code}${digitsOnly}`;
   }
 
-  return cleaned.replace(/\D/g, '');
+  return digitsOnly;
+}
+
+export function sanitizeWhatsAppNumber(raw: string, defaultCountryCode = '254'): string {
+  return normalizePhoneNumber(raw, defaultCountryCode);
 }
 
 export function isValidWhatsAppNumber(raw: string, defaultCountryCode = '254'): boolean {
-  const digits = sanitizeWhatsAppNumber(raw, defaultCountryCode);
+  const digits = normalizePhoneNumber(raw, defaultCountryCode);
   return digits.length >= 10 && digits.length <= 15;
 }
 
