@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { Check, Delete, X } from 'lucide-react';
-import { Client } from '../types';
+import { Banknote, Check, Delete, Smartphone, X } from 'lucide-react';
+import { Client, PaymentMethod } from '../types';
 import { formatCurrency, formatNumber, roundCurrency } from '../lib/currency';
 import { triggerHaptic, useDeniBook } from '../lib/store';
 
@@ -16,6 +16,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ client, onClose }) =
   const [amountInput, setAmountInput] = useState<string>(
     client.total_balance > 0 ? String(roundCurrency(client.total_balance)) : ''
   );
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('CASH');
   const [note, setNote] = useState('');
   const [isSaving, setIsSaving] = useState(false);
 
@@ -44,6 +45,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ client, onClose }) =
         clientId: client.id,
         amount: numericAmount,
         note,
+        paymentMethod,
       });
       if (ok) onClose();
     } finally {
@@ -85,8 +87,50 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ client, onClose }) =
           </button>
         </div>
 
+        {/* Payment Method 2-Pill Toggle */}
+        <div
+          className="mt-4 grid grid-cols-2 gap-1.5 p-1 rounded-2xl bg-stone-100 dark:bg-stone-900 border border-stone-200 dark:border-stone-800"
+          role="radiogroup"
+          aria-label="Payment method"
+        >
+          <button
+            type="button"
+            role="radio"
+            aria-checked={paymentMethod === 'CASH'}
+            onClick={() => {
+              triggerHaptic(8);
+              setPaymentMethod('CASH');
+            }}
+            className={`min-h-[42px] rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-all ${
+              paymentMethod === 'CASH'
+                ? 'bg-white dark:bg-[#1E2925] text-stone-900 dark:text-stone-50 shadow-xs border border-stone-200/80 dark:border-stone-700'
+                : 'text-stone-500 dark:text-stone-400 hover:text-stone-800 dark:hover:text-stone-200'
+            }`}
+          >
+            <Banknote className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+            <span>Cash</span>
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={paymentMethod === 'MPESA'}
+            onClick={() => {
+              triggerHaptic(8);
+              setPaymentMethod('MPESA');
+            }}
+            className={`min-h-[42px] rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-all ${
+              paymentMethod === 'MPESA'
+                ? 'bg-emerald-600 text-white shadow-xs'
+                : 'text-stone-500 dark:text-stone-400 hover:text-stone-800 dark:hover:text-stone-200'
+            }`}
+          >
+            <Smartphone className="w-4 h-4" />
+            <span>M-Pesa</span>
+          </button>
+        </div>
+
         {/* Amount Display */}
-        <div className="mt-4 rounded-xl bg-stone-50 dark:bg-stone-900 border border-stone-200 dark:border-stone-800 p-3.5">
+        <div className="mt-3 rounded-xl bg-stone-50 dark:bg-stone-900 border border-stone-200 dark:border-stone-800 p-3.5">
           <label
             htmlFor="payment-amount-input"
             className="block text-xs font-medium text-stone-500 dark:text-stone-400"

@@ -3,6 +3,7 @@ import {
   Check,
   Cloud,
   Download,
+  FileSpreadsheet,
   KeyRound,
   Lock,
   LogOut,
@@ -21,7 +22,11 @@ import { isSupabaseConfigured } from '../lib/supabase';
 import { HelpSupportSection } from './HelpSupportSection';
 import { PWAInstallButton } from './PWAInstallButton';
 
-export const ProductSettings: React.FC = () => {
+interface ProductSettingsProps {
+  onOpenZReport?: () => void;
+}
+
+export const ProductSettings: React.FC<ProductSettingsProps> = ({ onOpenZReport }) => {
   const { user, profile } = useAuth();
   const {
     products,
@@ -115,7 +120,17 @@ export const ProductSettings: React.FC = () => {
             Manage item prices, WhatsApp reminder script, PIN lock, and ledger backups.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {onOpenZReport && (
+            <button
+              type="button"
+              onClick={onOpenZReport}
+              className="min-h-[44px] px-4 rounded-xl bg-[#07111F] hover:bg-[#0E1D33] text-emerald-300 text-sm font-semibold flex items-center gap-2 whitespace-nowrap shrink-0"
+            >
+              <FileSpreadsheet className="w-4 h-4" />
+              <span>Daily Z-Report</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={exportCsv}
@@ -490,6 +505,16 @@ export const ProductSettings: React.FC = () => {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {onOpenZReport && (
+              <button
+                type="button"
+                onClick={onOpenZReport}
+                className="min-h-[44px] px-4 rounded-xl bg-[#07111F] hover:bg-[#0E1D33] text-emerald-300 text-sm font-semibold flex items-center gap-2"
+              >
+                <FileSpreadsheet className="w-4 h-4" />
+                <span>Daily Z-Report</span>
+              </button>
+            )}
             {isSupabaseConfigured && (
               <button
                 type="button"

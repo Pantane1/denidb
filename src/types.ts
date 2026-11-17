@@ -3,6 +3,8 @@ export enum TransactionType {
   PAYMENT = 'PAYMENT',
 }
 
+export type PaymentMethod = 'CASH' | 'MPESA';
+
 export interface AuthUser {
   id: string;
   email: string;
@@ -41,6 +43,7 @@ export interface LedgerTransaction {
   client_id: string;
   client_tx_id?: string;
   type: TransactionType;
+  payment_method?: PaymentMethod | null;
   product_name: string;
   quantity: number;
   split_count: number;

@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Loader2, Lock, LogOut, Moon, Sun, UserPlus } from 'lucide-react';
+import { FileSpreadsheet, Loader2, Lock, LogOut, Moon, Sun, UserPlus } from 'lucide-react';
 import { AddClientModal } from './components/AddClientModal';
 import { AuthScreen } from './components/AuthScreen';
 import { ClientGrid } from './components/ClientGrid';
@@ -12,6 +12,7 @@ import { SummaryKPIs } from './components/SummaryKPIs';
 import { SyncStatusPill } from './components/SyncStatusPill';
 import { TapCounterBar } from './components/TapCounterBar';
 import { ToastStack } from './components/ToastStack';
+import { ZReportModal } from './components/ZReportModal';
 import { AuthProvider, useAuth } from './lib/auth';
 import { DeniBookProvider, useDeniBook } from './lib/store';
 
@@ -32,6 +33,7 @@ const DeniBookShell: React.FC = () => {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [profileClientId, setProfileClientId] = useState<string | null>(null);
   const [showAddClient, setShowAddClient] = useState(false);
+  const [showZReport, setShowZReport] = useState(false);
 
   const selectedClients = useMemo(
     () => clients.filter((c) => selectedIds.includes(c.id)),
@@ -53,8 +55,8 @@ const DeniBookShell: React.FC = () => {
   return (
     <div className="min-h-screen bg-[#F6F7F5] dark:bg-[#0B0F0E] text-stone-900 dark:text-stone-100">
       {/* Compact Sticky Top Bar (56px, 3 zones) */}
-      <header className="sticky top-0 z-30 h-14 bg-white/90 dark:bg-[#131917]/90 backdrop-blur-md border-b border-stone-200 dark:border-[#222B28]">
-        <div className="max-w-7xl mx-auto h-full px-4 sm:px-6 flex items-center justify-between gap-4 sm:gap-8">
+      <header className="sticky top-0 z-30 h-14 bg-white/90 dark:bg-[#131917]/90 backdrop-blur-md border-b border-stone-200 dark:border-[#222B28] no-print">
+        <div className="max-w-7xl mx-auto h-full px-4 sm:px-6 flex items-center justify-between gap-3 sm:gap-8">
           {/* Zone 1: Brand Wordmark */}
           <button
             type="button"
@@ -66,7 +68,7 @@ const DeniBookShell: React.FC = () => {
 
           {/* Zone 2: Concise Single-Line Navigation */}
           <nav
-            className="flex items-center gap-4 sm:gap-6 text-sm font-semibold"
+            className="flex items-center gap-3 sm:gap-6 text-xs sm:text-sm font-semibold"
             aria-label="Main navigation"
           >
             <button
@@ -91,7 +93,16 @@ const DeniBookShell: React.FC = () => {
             >
               Settings
             </button>
-            <div className="hidden sm:block">
+            <button
+              type="button"
+              onClick={() => setShowZReport(true)}
+              className="min-h-[36px] px-2.5 sm:px-3 rounded-lg bg-[#07111F] hover:bg-[#0E1D33] text-emerald-300 border border-slate-800 text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5 shrink-0" />
+              <span className="hidden sm:inline">Daily Z-Report</span>
+              <span className="sm:hidden">Z-Report</span>
+            </button>
+            <div className="hidden md:block">
               <PWAInstallButton variant="compact" />
             </div>
           </nav>
@@ -101,7 +112,7 @@ const DeniBookShell: React.FC = () => {
             <button
               type="button"
               onClick={() => setShowAddClient(true)}
-              className="min-h-[40px] px-3.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-xs sm:text-sm font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 active:scale-[0.98] transition-all"
+              className="min-h-[40px] px-3 sm:px-3.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-xs sm:text-sm font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 active:scale-[0.98] transition-all"
             >
               <UserPlus className="w-4 h-4" />
               <span className="hidden sm:inline">Add Client</span>
@@ -112,7 +123,7 @@ const DeniBookShell: React.FC = () => {
       </header>
 
       <main
-        className={`max-w-7xl mx-auto px-4 sm:px-6 pt-4 sm:pt-6 ${
+        className={`max-w-7xl mx-auto px-4 sm:px-6 pt-4 sm:pt-6 no-print ${
           selectedClients.length > 0 ? 'pb-60 sm:pb-52' : 'pb-12'
         }`}
       >
@@ -194,7 +205,7 @@ const DeniBookShell: React.FC = () => {
             )}
           </div>
         ) : (
-          <ProductSettings />
+          <ProductSettings onOpenZReport={() => setShowZReport(true)} />
         )}
 
         <footer className="mt-10 pt-5 border-t border-stone-200/80 dark:border-[#222B28] text-center">
@@ -214,18 +225,22 @@ const DeniBookShell: React.FC = () => {
 
       {/* Tap-to-Count Action Bar (renders when 1+ clients selected) */}
       {activeTab === 'ledger' && (
-        <TapCounterBar
-          selectedClients={selectedClients}
-          onClearSelection={() => setSelectedIds([])}
-        />
+        <div className="no-print">
+          <TapCounterBar
+            selectedClients={selectedClients}
+            onClearSelection={() => setSelectedIds([])}
+          />
+        </div>
       )}
 
       {/* Client Profile & Ledger Drawer */}
       {profileClientId && (
-        <ClientProfileDrawer
-          clientId={profileClientId}
-          onClose={() => setProfileClientId(null)}
-        />
+        <div className="no-print">
+          <ClientProfileDrawer
+            clientId={profileClientId}
+            onClose={() => setProfileClientId(null)}
+          />
+        </div>
       )}
 
       {/* Add Client Modal */}
@@ -239,10 +254,15 @@ const DeniBookShell: React.FC = () => {
         />
       )}
 
+      {/* Daily Z-Report Modal */}
+      {showZReport && <ZReportModal onClose={() => setShowZReport(false)} />}
+
       {/* Password Recovery Modal */}
       {isPasswordRecovery && <SetNewPasswordModal />}
 
-      <ToastStack />
+      <div className="no-print">
+        <ToastStack />
+      </div>
     </div>
   );
 };

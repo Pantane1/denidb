@@ -4,6 +4,7 @@ import {
   Client,
   LedgerTransaction,
   OfflineQueueOp,
+  PaymentMethod,
   Product,
   ToastItem,
   TransactionType,
@@ -106,6 +107,7 @@ function createSampleData(): {
       id: uuid(),
       client_id: c1,
       type: TransactionType.PAYMENT,
+      payment_method: 'CASH',
       product_name: 'Payment',
       quantity: 1,
       split_count: 1,
@@ -149,6 +151,7 @@ function createSampleData(): {
       id: uuid(),
       client_id: c4,
       type: TransactionType.PAYMENT,
+      payment_method: 'MPESA',
       product_name: 'Payment',
       quantity: 1,
       split_count: 1,
@@ -348,6 +351,7 @@ interface DeniBookContextValue {
     clientId: string;
     amount: number;
     note?: string;
+    paymentMethod?: PaymentMethod;
   }) => Promise<boolean>;
   voidTransaction: (txId: string) => Promise<boolean>;
   upsertProduct: (product: Omit<Product, 'id'> & { id?: string }) => Promise<boolean>;
@@ -591,6 +595,7 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
               client_id: t.client_id,
               client_tx_id: t.client_tx_id || t.id,
               type: t.type,
+              payment_method: t.payment_method ?? null,
               product_name: t.product_name,
               quantity: t.quantity,
               split_count: t.split_count,
@@ -1027,6 +1032,7 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                 client_id: clientId,
                 client_tx_id: uuid(),
                 type: TransactionType.PAYMENT,
+                payment_method: 'CASH' as PaymentMethod,
                 product_name: 'Deposit',
                 quantity: 1,
                 split_count: splitCount,
@@ -1072,6 +1078,7 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           client_id: t.client_id,
           client_tx_id: t.client_tx_id,
           type: t.type,
+          payment_method: t.payment_method ?? null,
           product_name: t.product_name,
           quantity: t.quantity,
           split_count: t.split_count,
@@ -1180,10 +1187,12 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       clientId,
       amount,
       note,
+      paymentMethod = 'CASH',
     }: {
       clientId: string;
       amount: number;
       note?: string;
+      paymentMethod?: PaymentMethod;
     }): Promise<boolean> => {
       if (amount <= 0) return false;
       const cleanAmount = roundCurrency(amount);
@@ -1194,6 +1203,7 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         client_id: clientId,
         client_tx_id: uuid(),
         type: TransactionType.PAYMENT,
+        payment_method: paymentMethod,
         product_name: 'Payment',
         quantity: 1,
         split_count: 1,
@@ -1237,6 +1247,7 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                 client_id: clientId,
                 client_tx_id: paymentTx.client_tx_id,
                 type: TransactionType.PAYMENT,
+                payment_method: paymentMethod,
                 product_name: 'Payment',
                 quantity: 1,
                 split_count: 1,

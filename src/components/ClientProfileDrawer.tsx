@@ -223,9 +223,22 @@ export const ClientProfileDrawer: React.FC<ClientProfileDrawerProps> = ({
                       className="py-3.5 flex items-start justify-between gap-3"
                     >
                       <div className="min-w-0">
-                        <p className="text-sm font-semibold text-stone-900 dark:text-stone-100">
-                          {description}
-                        </p>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-semibold text-stone-900 dark:text-stone-100">
+                            {description}
+                          </p>
+                          {!isDebt && (
+                            <span
+                              className={`inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-semibold border whitespace-nowrap ${
+                                entry.payment_method === 'MPESA'
+                                  ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800/60'
+                                  : 'bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-300 border-stone-200 dark:border-stone-700'
+                              }`}
+                            >
+                              {entry.payment_method === 'MPESA' ? 'M-Pesa' : 'Cash'}
+                            </span>
+                          )}
+                        </div>
                         <p className="mt-0.5 text-xs text-stone-500 dark:text-stone-400 font-mono-num">
                           {formatLedgerDateTime(entry.created_at)}
                         </p>

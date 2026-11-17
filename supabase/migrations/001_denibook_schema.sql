@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS public.transactions (
   client_id UUID NOT NULL REFERENCES public.clients(id) ON DELETE CASCADE,
   client_tx_id UUID UNIQUE,
   type TEXT NOT NULL CHECK (type IN ('DEBT', 'PAYMENT')),
+  payment_method TEXT CHECK (payment_method IS NULL OR payment_method IN ('CASH', 'MPESA')),
   product_name TEXT NOT NULL,
   quantity NUMERIC(10, 2) NOT NULL DEFAULT 1 CHECK (quantity > 0),
   split_count INT NOT NULL DEFAULT 1 CHECK (split_count >= 1),
@@ -58,6 +59,9 @@ CREATE TABLE IF NOT EXISTS public.transactions (
 
 ALTER TABLE public.transactions
   ADD COLUMN IF NOT EXISTS client_tx_id UUID;
+
+ALTER TABLE public.transactions
+  ADD COLUMN IF NOT EXISTS payment_method TEXT;
 
 DO $$
 BEGIN
