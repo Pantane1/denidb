@@ -8,9 +8,11 @@ import {
   X,
 } from 'lucide-react';
 import { Client, TransactionType } from '../types';
+import { getCreditHealth } from '../lib/credit';
 import {
   formatCurrency,
   formatLedgerDateTime,
+  formatNumber,
   formatShortDate,
   roundCurrency,
 } from '../lib/currency';
@@ -116,30 +118,54 @@ export const ClientProfileDrawer: React.FC<ClientProfileDrawerProps> = ({
             </div>
 
             {/* Balance Card */}
-            <div className="mt-4 rounded-2xl bg-stone-50 dark:bg-stone-900 border border-stone-200 dark:border-stone-800 p-4 flex items-center justify-between gap-3">
-              <div>
-                <p className="text-xs font-semibold text-stone-500 dark:text-stone-400">
-                  Total Outstanding Balance
-                </p>
-                <p
-                  className={`mt-1 font-mono-num text-2xl sm:text-3xl font-bold ${
+            <div className="mt-4 rounded-2xl bg-stone-50 dark:bg-stone-900 border border-stone-200 dark:border-stone-800 p-4 space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold text-stone-500 dark:text-stone-400">
+                    Total Outstanding Balance
+                  </p>
+                  <p
+                    className={`mt-1 font-mono-num text-2xl sm:text-3xl font-bold ${
+                      hasDebt
+                        ? 'text-rose-700 dark:text-rose-400'
+                        : 'text-emerald-700 dark:text-emerald-400'
+                    }`}
+                  >
+                    {formatCurrency(client.total_balance, settings.currency)}
+                  </p>
+                </div>
+                <span
+                  className={`text-xs font-bold ${
                     hasDebt
-                      ? 'text-rose-700 dark:text-rose-400'
+                      ? 'text-amber-700 dark:text-amber-400'
                       : 'text-emerald-700 dark:text-emerald-400'
                   }`}
                 >
-                  {formatCurrency(client.total_balance, settings.currency)}
-                </p>
+                  {hasDebt ? 'Active Credit' : 'All Settled'}
+                </span>
               </div>
-              <span
-                className={`text-xs font-bold ${
-                  hasDebt
-                    ? 'text-amber-700 dark:text-amber-400'
-                    : 'text-emerald-700 dark:text-emerald-400'
-                }`}
-              >
-                {hasDebt ? 'Active Credit' : 'All Settled'}
-              </span>
+
+              {(() => {
+                const health = getCreditHealth(client.total_balance, client.credit_limit);
+                if (!health.hasLimit || !client.credit_limit) return null;
+                return (
+                  <div className="pt-2.5 border-t border-stone-200/80 dark:border-stone-800">
+                    <div className="flex items-center justify-between gap-2 text-xs font-semibold">
+                      <span className="font-mono-num text-stone-700 dark:text-stone-300">
+                        Limit: {settings.currency} {formatNumber(client.total_balance)} /{' '}
+                        {formatNumber(client.credit_limit)} ({health.percent}%)
+                      </span>
+                      <span className={health.textClass}>{health.label}</span>
+                    </div>
+                    <div className="mt-1.5 h-2 w-full rounded-full bg-stone-200 dark:bg-stone-800 overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all duration-200 ${health.barClass}`}
+                        style={{ width: `${health.clampedPercent}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Action Buttons */}

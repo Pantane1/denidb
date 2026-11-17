@@ -21,6 +21,7 @@ export interface Client {
   user_id?: string;
   name: string;
   whatsapp_number: string;
+  credit_limit?: number | null;
   total_balance: number;
   created_at: string;
   updated_at: string;
@@ -38,6 +39,7 @@ export interface LedgerTransaction {
   id: string;
   user_id?: string;
   client_id: string;
+  client_tx_id?: string;
   type: TransactionType;
   product_name: string;
   quantity: number;
@@ -60,19 +62,31 @@ export interface AppSettings {
 
 export type ClientFilter = 'all' | 'owing' | 'settled';
 
-export interface PendingSyncOp {
-  id: string;
-  kind:
-    | 'ADD_CLIENT'
-    | 'UPDATE_CLIENT'
-    | 'DELETE_CLIENT'
-    | 'ADD_TRANSACTIONS'
-    | 'VOID_TRANSACTION'
-    | 'UPSERT_PRODUCT'
-    | 'DELETE_PRODUCT';
-  payload: unknown;
-  createdAt: string;
-}
+export type OfflineQueueOp =
+  | {
+      id: string;
+      kind: 'CREATE_CLIENT';
+      payload: Client;
+      createdAt: string;
+    }
+  | {
+      id: string;
+      kind: 'UPDATE_CLIENT';
+      payload: {
+        id: string;
+        name: string;
+        whatsapp_number: string;
+        credit_limit: number | null;
+        updated_at: string;
+      };
+      createdAt: string;
+    }
+  | {
+      id: string;
+      kind: 'ADD_TRANSACTIONS';
+      payload: LedgerTransaction[];
+      createdAt: string;
+    };
 
 export interface ToastItem {
   id: string;

@@ -1,7 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { Check, FileText, Search, UserPlus, Users, X } from 'lucide-react';
 import { Client, ClientFilter } from '../types';
-import { formatCurrency, formatShortDate } from '../lib/currency';
+import { getCreditHealth } from '../lib/credit';
+import { formatCurrency, formatNumber, formatShortDate } from '../lib/currency';
 import { formatPhoneDisplay } from '../lib/phone';
 import { triggerHaptic, useDeniBook } from '../lib/store';
 import { QuickWhatsAppBell } from './WhatsAppNotifier';
@@ -166,6 +167,7 @@ export const ClientGrid: React.FC<ClientGridProps> = ({
           {filteredClients.map((client) => {
             const isSelected = selectedIds.includes(client.id);
             const hasDebt = client.total_balance > 0;
+            const creditHealth = getCreditHealth(client.total_balance, client.credit_limit);
 
             return (
               <div
@@ -253,6 +255,27 @@ export const ClientGrid: React.FC<ClientGridProps> = ({
                     </button>
                   </div>
                 </div>
+
+                {/* Credit Limit Progress Indicator */}
+                {creditHealth.hasLimit && client.credit_limit && (
+                  <div className="mt-3 pt-2.5 border-t border-stone-100 dark:border-[#1E2724]">
+                    <div className="flex items-center justify-between gap-2 text-[11px] font-semibold">
+                      <span className="font-mono-num text-stone-600 dark:text-stone-300 truncate">
+                        {settings.currency} {formatNumber(client.total_balance)} /{' '}
+                        {formatNumber(client.credit_limit)}
+                      </span>
+                      <span className={`${creditHealth.textClass} shrink-0`}>
+                        {creditHealth.label}
+                      </span>
+                    </div>
+                    <div className="mt-1.5 h-1.5 w-full rounded-full bg-stone-200 dark:bg-stone-800 overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all duration-200 ${creditHealth.barClass}`}
+                        style={{ width: `${creditHealth.clampedPercent}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })}

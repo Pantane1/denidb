@@ -3,6 +3,7 @@ import {
   AppSettings,
   Client,
   LedgerTransaction,
+  OfflineQueueOp,
   Product,
   ToastItem,
   TransactionType,
@@ -14,6 +15,27 @@ import { isSupabaseConfigured, supabase } from './supabase';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 
 const THEME_PREF_KEY = 'denibook_ui_theme_v1';
+
+function offlineQueueKey(userId: string): string {
+  return `denibook_offline_queue_${userId}`;
+}
+
+function readOfflineQueue(userId: string): OfflineQueueOp[] {
+  try {
+    const raw = localStorage.getItem(offlineQueueKey(userId));
+    return raw ? (JSON.parse(raw) as OfflineQueueOp[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeOfflineQueue(userId: string, queue: OfflineQueueOp[]): void {
+  try {
+    localStorage.setItem(offlineQueueKey(userId), JSON.stringify(queue));
+  } catch {
+    // ignore storage quota issues
+  }
+}
 
 const DEFAULT_SETTINGS: AppSettings = {
   shopName: 'My Shop',
@@ -34,6 +56,20 @@ function uuid(): string {
     const v = c === 'x' ? r : (r & 0x3) | 0x8;
     return v.toString(16);
   });
+}
+
+function isNetworkFailure(err: unknown): boolean {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return true;
+  if (err instanceof TypeError) return true;
+  const msg =
+    typeof err === 'string'
+      ? err
+      : err && typeof err === 'object' && 'message' in err
+        ? String((err as { message?: unknown }).message ?? '')
+        : '';
+  return /failed to fetch|networkerror|network request failed|load failed|fetch|timeout|offline/i.test(
+    msg
+  );
 }
 
 function createSampleData(): {
@@ -127,6 +163,7 @@ function createSampleData(): {
       id: c1,
       name: 'Wanjiku Kamau',
       whatsapp_number: '254712345678',
+      credit_limit: 500,
       total_balance: 0,
       created_at: hoursAgo(72),
       updated_at: hoursAgo(1),
@@ -135,6 +172,7 @@ function createSampleData(): {
       id: c2,
       name: 'Brian Ochieng',
       whatsapp_number: '254723456789',
+      credit_limit: 1000,
       total_balance: 0,
       created_at: hoursAgo(72),
       updated_at: hoursAgo(3),
@@ -143,6 +181,7 @@ function createSampleData(): {
       id: c3,
       name: 'Grace Mutua',
       whatsapp_number: '254734567890',
+      credit_limit: null,
       total_balance: 0,
       created_at: hoursAgo(72),
       updated_at: hoursAgo(3),
@@ -151,6 +190,7 @@ function createSampleData(): {
       id: c4,
       name: 'Peter Njoroge',
       whatsapp_number: '254745678901',
+      credit_limit: 500,
       total_balance: 0,
       created_at: hoursAgo(72),
       updated_at: hoursAgo(4),
@@ -189,6 +229,72 @@ function recomputeBalances(clients: Client[], transactions: LedgerTransaction[])
   });
 }
 
+function applyOfflineQueueOptimistically(
+  baseClients: Client[],
+  baseTransactions: LedgerTransaction[],
+  queue: OfflineQueueOp[]
+): { clients: Client[]; transactions: LedgerTransaction[] } {
+  if (queue.length === 0) {
+    return { clients: baseClients, transactions: baseTransactions };
+  }
+
+  let nextClients = [...baseClients];
+  let nextTransactions = [...baseTransactions];
+  const existingTxIds = new Set(nextTransactions.map((t) => t.client_tx_id || t.id));
+
+  for (const op of queue) {
+    if (op.kind === 'CREATE_CLIENT') {
+      if (!nextClients.some((c) => c.id === op.payload.id)) {
+        nextClients = [op.payload, ...nextClients];
+      }
+    } else if (op.kind === 'UPDATE_CLIENT') {
+      nextClients = nextClients.map((c) =>
+        c.id === op.payload.id
+          ? {
+              ...c,
+              name: op.payload.name,
+              whatsapp_number: op.payload.whatsapp_number,
+              credit_limit: op.payload.credit_limit,
+              updated_at: op.payload.updated_at,
+            }
+          : c
+      );
+    } else if (op.kind === 'ADD_TRANSACTIONS') {
+      const fresh = op.payload.filter((t) => !existingTxIds.has(t.client_tx_id || t.id));
+      for (const t of fresh) {
+        existingTxIds.add(t.client_tx_id || t.id);
+      }
+      if (fresh.length > 0) {
+        nextTransactions = [...fresh.map((t) => ({ ...t, pending_sync: true })), ...nextTransactions];
+        const deltas = new Map<string, { delta: number; latestAt?: string }>();
+        for (const t of fresh) {
+          const prev = deltas.get(t.client_id) || { delta: 0, latestAt: undefined };
+          const d = t.type === TransactionType.DEBT ? t.amount : -t.amount;
+          const latestAt =
+            !prev.latestAt || new Date(t.created_at) > new Date(prev.latestAt)
+              ? t.created_at
+              : prev.latestAt;
+          deltas.set(t.client_id, {
+            delta: roundCurrency(prev.delta + d),
+            latestAt,
+          });
+        }
+        nextClients = nextClients.map((c) => {
+          const info = deltas.get(c.id);
+          if (!info) return c;
+          return {
+            ...c,
+            total_balance: roundCurrency(Math.max(0, c.total_balance + info.delta)),
+            updated_at: info.latestAt || c.updated_at,
+          };
+        });
+      }
+    }
+  }
+
+  return { clients: nextClients, transactions: nextTransactions };
+}
+
 export function triggerHaptic(ms = 12): void {
   if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
     navigator.vibrate(ms);
@@ -203,6 +309,7 @@ interface DeniBookContextValue {
   pendingOpsCount: number;
   isOnline: boolean;
   isSyncing: boolean;
+  justSynced: boolean;
   isInitialLoading: boolean;
   isLocked: boolean;
   toasts: ToastItem[];
@@ -216,8 +323,17 @@ interface DeniBookContextValue {
   updateSettings: (patch: Partial<AppSettings>) => Promise<void>;
   pushToast: (message: string, tone?: ToastItem['tone']) => void;
   dismissToast: (id: string) => void;
-  addClient: (name: string, phone: string) => Promise<Client | null>;
-  updateClient: (id: string, name: string, phone: string) => Promise<boolean>;
+  addClient: (
+    name: string,
+    phone: string,
+    creditLimit?: number | null
+  ) => Promise<Client | null>;
+  updateClient: (
+    id: string,
+    name: string,
+    phone: string,
+    creditLimit?: number | null
+  ) => Promise<boolean>;
   deleteClient: (id: string) => Promise<boolean>;
   saveDebtSale: (params: {
     clientIds: string[];
@@ -266,7 +382,6 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     };
   });
 
-  // Sync settings whenever profile row arrives from Supabase
   useEffect(() => {
     if (!profile) return;
     setSettings((prev) => ({
@@ -278,19 +393,44 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }));
   }, [profile]);
 
-  // Pure in-memory state hydrated directly from Supabase PostgreSQL
-  const [clients, setClients] = useState<Client[]>([]);
+  const [offlineQueue, setOfflineQueue] = useState<OfflineQueueOp[]>(() =>
+    readOfflineQueue(user.id)
+  );
+  const [clients, setClients] = useState<Client[]>(() => {
+    const initial = applyOfflineQueueOptimistically([], [], readOfflineQueue(user.id));
+    return initial.clients;
+  });
   const [products, setProducts] = useState<Product[]>(
     isSupabaseConfigured ? [] : [{ id: uuid(), name: 'Fert', unit_price: 50, is_default: true }]
   );
-  const [transactions, setTransactions] = useState<LedgerTransaction[]>([]);
+  const [transactions, setTransactions] = useState<LedgerTransaction[]>(() => {
+    const initial = applyOfflineQueueOptimistically([], [], readOfflineQueue(user.id));
+    return initial.transactions;
+  });
+
   const [isSyncing, setIsSyncing] = useState(false);
+  const [justSynced, setJustSynced] = useState(false);
   const [isInitialLoading, setIsInitialLoading] = useState<boolean>(isSupabaseConfigured);
   const [isLocked, setIsLocked] = useState<boolean>(false);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
-  const fetchingRef = useRef(false);
+  const syncingRef = useRef(false);
+  const queueRef = useRef<OfflineQueueOp[]>(offlineQueue);
+  const clientsRef = useRef<Client[]>(clients);
+  const transactionsRef = useRef<LedgerTransaction[]>(transactions);
 
-  // Sync theme class on <html>
+  useEffect(() => {
+    clientsRef.current = clients;
+  }, [clients]);
+
+  useEffect(() => {
+    transactionsRef.current = transactions;
+  }, [transactions]);
+
+  useEffect(() => {
+    queueRef.current = offlineQueue;
+    writeOfflineQueue(user.id, offlineQueue);
+  }, [offlineQueue, user.id]);
+
   useEffect(() => {
     const root = document.documentElement;
     if (settings.theme === 'dark') {
@@ -313,19 +453,23 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  const fetchAllFromSupabase = useCallback(async () => {
-    if (!isSupabaseConfigured || !supabase || !user?.id || fetchingRef.current) {
-      setIsInitialLoading(false);
-      return;
-    }
+  const enqueueOfflineOp = useCallback(
+    (op: OfflineQueueOp) => {
+      setOfflineQueue((prev) => {
+        const next = [...prev, op];
+        queueRef.current = next;
+        writeOfflineQueue(user.id, next);
+        return next;
+      });
+    },
+    [user.id]
+  );
 
-    fetchingRef.current = true;
-    setIsSyncing(true);
-    try {
+  const fetchAndHydrateFromSupabase = useCallback(
+    async (remainingQueue: OfflineQueueOp[]) => {
+      if (!isSupabaseConfigured || !supabase || !user?.id) return;
       const { data: authData, error: authErr } = await supabase.auth.getUser();
-      if (authErr || !authData.user) {
-        return;
-      }
+      if (authErr || !authData.user) return;
       const uid = authData.user.id;
 
       const [clientsRes, productsRes, txRes] = await Promise.all([
@@ -347,18 +491,27 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           .limit(2000),
       ]);
 
+      const remoteClients =
+        !clientsRes.error && clientsRes.data ? (clientsRes.data as Client[]) : clientsRef.current;
+      const remoteTxs =
+        !txRes.error && txRes.data ? (txRes.data as LedgerTransaction[]) : transactionsRef.current;
+
       if (clientsRes.error) {
         pushToast(`Failed to load clients: ${clientsRes.error.message}`, 'error');
-      } else {
-        setClients((clientsRes.data as Client[]) || []);
       }
+      if (txRes.error) {
+        pushToast(`Failed to load transactions: ${txRes.error.message}`, 'error');
+      }
+
+      const merged = applyOfflineQueueOptimistically(remoteClients, remoteTxs, remainingQueue);
+      setClients(merged.clients);
+      setTransactions(merged.transactions);
 
       if (productsRes.error) {
         pushToast(`Failed to load products: ${productsRes.error.message}`, 'error');
       } else if (productsRes.data && productsRes.data.length > 0) {
         setProducts(productsRes.data as Product[]);
       } else {
-        // Ensure new account has default "Fert" @ 50 in Supabase
         const { data: seeded, error: seedErr } = await supabase
           .from('products')
           .insert({
@@ -368,48 +521,153 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             is_default: true,
           })
           .select('*');
-        if (seedErr) {
-          pushToast(`Failed to seed default item: ${seedErr.message}`, 'error');
-        } else if (seeded) {
+        if (!seedErr && seeded) {
           setProducts(seeded as Product[]);
         }
       }
 
-      if (txRes.error) {
-        pushToast(`Failed to load transactions: ${txRes.error.message}`, 'error');
-      } else {
-        setTransactions((txRes.data as LedgerTransaction[]) || []);
+      await refreshProfile();
+    },
+    [pushToast, refreshProfile, user?.id]
+  );
+
+  const syncNow = useCallback(async () => {
+    if (!isSupabaseConfigured || !supabase || !user?.id || syncingRef.current) {
+      setIsInitialLoading(false);
+      return;
+    }
+    if (!isOnline) {
+      setIsInitialLoading(false);
+      return;
+    }
+
+    syncingRef.current = true;
+    setIsSyncing(true);
+
+    try {
+      const { data: authData, error: authErr } = await supabase.auth.getUser();
+      if (authErr || !authData.user) {
+        return;
+      }
+      const uid = authData.user.id;
+      const currentQueue = [...queueRef.current];
+      const flushedCountInitial = currentQueue.length;
+      let failedIndex = -1;
+
+      // Strict FIFO flush
+      for (let i = 0; i < currentQueue.length; i++) {
+        const op = currentQueue[i];
+        try {
+          if (op.kind === 'CREATE_CLIENT') {
+            const c = op.payload;
+            const { error } = await supabase.from('clients').upsert(
+              {
+                id: c.id,
+                user_id: uid,
+                name: c.name,
+                whatsapp_number: c.whatsapp_number,
+                credit_limit: c.credit_limit ?? null,
+                created_at: c.created_at,
+              },
+              { onConflict: 'id' }
+            );
+            if (error) throw error;
+          } else if (op.kind === 'UPDATE_CLIENT') {
+            const p = op.payload;
+            const { error } = await supabase
+              .from('clients')
+              .update({
+                name: p.name,
+                whatsapp_number: p.whatsapp_number,
+                credit_limit: p.credit_limit,
+              })
+              .eq('id', p.id)
+              .eq('user_id', uid);
+            if (error) throw error;
+          } else if (op.kind === 'ADD_TRANSACTIONS') {
+            const rows = op.payload.map((t) => ({
+              id: t.id,
+              user_id: uid,
+              client_id: t.client_id,
+              client_tx_id: t.client_tx_id || t.id,
+              type: t.type,
+              product_name: t.product_name,
+              quantity: t.quantity,
+              split_count: t.split_count,
+              amount: t.amount,
+              note: t.note ?? null,
+              created_at: t.created_at,
+            }));
+            const { error } = await supabase
+              .from('transactions')
+              .upsert(rows, { onConflict: 'client_tx_id', ignoreDuplicates: true });
+            if (error) throw error;
+          }
+        } catch (err) {
+          failedIndex = i;
+          if (!isNetworkFailure(err)) {
+            const msg =
+              err && typeof err === 'object' && 'message' in err
+                ? String((err as { message?: unknown }).message)
+                : 'Sync failed';
+            pushToast(`Sync error: ${msg}`, 'error');
+          }
+          break;
+        }
       }
 
-      await refreshProfile();
+      const remainingQueue = failedIndex === -1 ? [] : currentQueue.slice(failedIndex);
+      queueRef.current = remainingQueue;
+      setOfflineQueue(remainingQueue);
+      writeOfflineQueue(user.id, remainingQueue);
+
+      if (failedIndex === -1) {
+        await fetchAndHydrateFromSupabase([]);
+        if (flushedCountInitial > 0) {
+          setJustSynced(true);
+          pushToast(
+            `Synced ${flushedCountInitial} offline ${
+              flushedCountInitial === 1 ? 'change' : 'changes'
+            }`
+          );
+          window.setTimeout(() => setJustSynced(false), 2800);
+        }
+      }
     } finally {
-      fetchingRef.current = false;
+      syncingRef.current = false;
       setIsSyncing(false);
       setIsInitialLoading(false);
     }
-  }, [pushToast, refreshProfile, user?.id]);
+  }, [fetchAndHydrateFromSupabase, isOnline, pushToast, user.id]);
 
-  // Fetch user data on login & page reload tied to user?.id
+  // Flush FIFO queue & fetch user data on login, page reload, and online event
   useEffect(() => {
-    if (isSupabaseConfigured && user?.id) {
-      void fetchAllFromSupabase();
+    if (isSupabaseConfigured && user?.id && isOnline) {
+      void syncNow();
     } else {
       setIsInitialLoading(false);
     }
-  }, [fetchAllFromSupabase, user?.id]);
+  }, [isOnline, syncNow, user?.id]);
 
   const getAuthenticatedUserId = useCallback(async (): Promise<string | null> => {
     if (!supabase) return null;
-    const {
-      data: { user: authUser },
-      error,
-    } = await supabase.auth.getUser();
-    if (error || !authUser) {
-      pushToast(error?.message || 'Session expired. Please sign in again.', 'error');
+    try {
+      const {
+        data: { user: authUser },
+        error,
+      } = await supabase.auth.getUser();
+      if (error || !authUser) {
+        if (error && isNetworkFailure(error)) return user.id;
+        pushToast(error?.message || 'Session expired. Please sign in again.', 'error');
+        return null;
+      }
+      return authUser.id;
+    } catch (err) {
+      if (isNetworkFailure(err)) return user.id;
+      pushToast('Unable to verify session.', 'error');
       return null;
     }
-    return authUser.id;
-  }, [pushToast]);
+  }, [pushToast, user.id]);
 
   const unlockWithPin = useCallback(
     (pin: string) => {
@@ -459,100 +717,226 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   );
 
   const addClient = useCallback(
-    async (name: string, phone: string): Promise<Client | null> => {
+    async (
+      name: string,
+      phone: string,
+      creditLimit: number | null = null
+    ): Promise<Client | null> => {
       const cleanName = name.trim();
       const formattedPhone = sanitizeWhatsAppNumber(phone, settings.countryCode);
-
-      if (isSupabaseConfigured && supabase) {
-        const uid = await getAuthenticatedUserId();
-        if (!uid) return null;
-
-        const { data, error } = await supabase
-          .from('clients')
-          .insert({
-            user_id: uid,
-            name: cleanName,
-            whatsapp_number: formattedPhone,
-          })
-          .select('*')
-          .single();
-
-        if (error || !data) {
-          pushToast(`Could not add client: ${error?.message || 'Unknown error'}`, 'error');
-          return null;
-        }
-
-        const created = data as Client;
-        setClients((prev) => [created, ...prev]);
-        pushToast(`Added ${created.name}`);
-        return created;
-      }
-
+      const cleanLimit = creditLimit && creditLimit > 0 ? roundCurrency(creditLimit) : null;
       const now = new Date().toISOString();
-      const created: Client = {
-        id: uuid(),
+      const newClientId = uuid();
+
+      const optimisticClient: Client = {
+        id: newClientId,
         user_id: user.id,
         name: cleanName,
         whatsapp_number: formattedPhone,
+        credit_limit: cleanLimit,
         total_balance: 0,
         created_at: now,
         updated_at: now,
       };
-      setClients((prev) => [created, ...prev]);
-      pushToast(`Added ${created.name}`);
-      return created;
+
+      if (isSupabaseConfigured && supabase) {
+        if (!isOnline) {
+          enqueueOfflineOp({
+            id: uuid(),
+            kind: 'CREATE_CLIENT',
+            payload: optimisticClient,
+            createdAt: now,
+          });
+          setClients((prev) => [optimisticClient, ...prev]);
+          pushToast('Saved offline — will sync automatically when online', 'info');
+          return optimisticClient;
+        }
+
+        const uid = await getAuthenticatedUserId();
+        if (!uid) return null;
+
+        try {
+          const { data, error } = await supabase
+            .from('clients')
+            .insert({
+              id: newClientId,
+              user_id: uid,
+              name: cleanName,
+              whatsapp_number: formattedPhone,
+              credit_limit: cleanLimit,
+            })
+            .select('*')
+            .single();
+
+          if (error) {
+            if (isNetworkFailure(error)) {
+              enqueueOfflineOp({
+                id: uuid(),
+                kind: 'CREATE_CLIENT',
+                payload: { ...optimisticClient, user_id: uid },
+                createdAt: now,
+              });
+              setClients((prev) => [{ ...optimisticClient, user_id: uid }, ...prev]);
+              pushToast('Saved offline — will sync automatically when online', 'info');
+              return { ...optimisticClient, user_id: uid };
+            }
+            pushToast(`Could not add client: ${error.message}`, 'error');
+            return null;
+          }
+
+          const created = data as Client;
+          setClients((prev) => [created, ...prev]);
+          pushToast(`Added ${created.name}`);
+          return created;
+        } catch (err) {
+          if (isNetworkFailure(err)) {
+            enqueueOfflineOp({
+              id: uuid(),
+              kind: 'CREATE_CLIENT',
+              payload: { ...optimisticClient, user_id: uid },
+              createdAt: now,
+            });
+            setClients((prev) => [{ ...optimisticClient, user_id: uid }, ...prev]);
+            pushToast('Saved offline — will sync automatically when online', 'info');
+            return { ...optimisticClient, user_id: uid };
+          }
+          pushToast('Could not add client due to an unexpected error', 'error');
+          return null;
+        }
+      }
+
+      setClients((prev) => [optimisticClient, ...prev]);
+      pushToast(`Added ${optimisticClient.name}`);
+      return optimisticClient;
     },
-    [getAuthenticatedUserId, pushToast, settings.countryCode, user.id]
+    [enqueueOfflineOp, getAuthenticatedUserId, isOnline, pushToast, settings.countryCode, user.id]
   );
 
   const updateClient = useCallback(
-    async (id: string, name: string, phone: string): Promise<boolean> => {
+    async (
+      id: string,
+      name: string,
+      phone: string,
+      creditLimit: number | null = null
+    ): Promise<boolean> => {
       const cleanName = name.trim();
       const formatted = sanitizeWhatsAppNumber(phone, settings.countryCode);
+      const cleanLimit = creditLimit && creditLimit > 0 ? roundCurrency(creditLimit) : null;
+      const now = new Date().toISOString();
+
+      const applyLocal = () => {
+        setClients((prev) =>
+          prev.map((c) =>
+            c.id === id
+              ? {
+                  ...c,
+                  name: cleanName,
+                  whatsapp_number: formatted,
+                  credit_limit: cleanLimit,
+                  updated_at: now,
+                }
+              : c
+          )
+        );
+      };
 
       if (isSupabaseConfigured && supabase) {
+        if (!isOnline) {
+          enqueueOfflineOp({
+            id: uuid(),
+            kind: 'UPDATE_CLIENT',
+            payload: {
+              id,
+              name: cleanName,
+              whatsapp_number: formatted,
+              credit_limit: cleanLimit,
+              updated_at: now,
+            },
+            createdAt: now,
+          });
+          applyLocal();
+          pushToast('Saved offline — will sync automatically when online', 'info');
+          return true;
+        }
+
         const uid = await getAuthenticatedUserId();
         if (!uid) return false;
 
-        const { data, error } = await supabase
-          .from('clients')
-          .update({ name: cleanName, whatsapp_number: formatted })
-          .eq('id', id)
-          .eq('user_id', uid)
-          .select('*')
-          .single();
+        try {
+          const { data, error } = await supabase
+            .from('clients')
+            .update({
+              name: cleanName,
+              whatsapp_number: formatted,
+              credit_limit: cleanLimit,
+            })
+            .eq('id', id)
+            .eq('user_id', uid)
+            .select('*')
+            .single();
 
-        if (error || !data) {
-          pushToast(`Could not update client: ${error?.message || 'Unknown error'}`, 'error');
-          return false;
-        }
+          if (error) {
+            if (isNetworkFailure(error)) {
+              enqueueOfflineOp({
+                id: uuid(),
+                kind: 'UPDATE_CLIENT',
+                payload: {
+                  id,
+                  name: cleanName,
+                  whatsapp_number: formatted,
+                  credit_limit: cleanLimit,
+                  updated_at: now,
+                },
+                createdAt: now,
+              });
+              applyLocal();
+              pushToast('Saved offline — will sync automatically when online', 'info');
+              return true;
+            }
+            pushToast(`Could not update client: ${error.message}`, 'error');
+            return false;
+          }
 
-        setClients((prev) => prev.map((c) => (c.id === id ? (data as Client) : c)));
-        pushToast('Client details updated');
-        return true;
-      }
-
-      setClients((prev) =>
-        prev.map((c) =>
-          c.id === id
-            ? {
-                ...c,
+          setClients((prev) => prev.map((c) => (c.id === id ? (data as Client) : c)));
+          pushToast('Client details updated');
+          return true;
+        } catch (err) {
+          if (isNetworkFailure(err)) {
+            enqueueOfflineOp({
+              id: uuid(),
+              kind: 'UPDATE_CLIENT',
+              payload: {
+                id,
                 name: cleanName,
                 whatsapp_number: formatted,
-                updated_at: new Date().toISOString(),
-              }
-            : c
-        )
-      );
+                credit_limit: cleanLimit,
+                updated_at: now,
+              },
+              createdAt: now,
+            });
+            applyLocal();
+            pushToast('Saved offline — will sync automatically when online', 'info');
+            return true;
+          }
+          pushToast('Could not update client', 'error');
+          return false;
+        }
+      }
+
+      applyLocal();
       pushToast('Client details updated');
       return true;
     },
-    [getAuthenticatedUserId, pushToast, settings.countryCode]
+    [enqueueOfflineOp, getAuthenticatedUserId, isOnline, pushToast, settings.countryCode]
   );
 
   const deleteClient = useCallback(
     async (id: string): Promise<boolean> => {
       if (isSupabaseConfigured && supabase) {
+        if (!isOnline) {
+          pushToast('Deleting clients requires an internet connection', 'error');
+          return false;
+        }
         const uid = await getAuthenticatedUserId();
         if (!uid) return false;
 
@@ -573,7 +957,7 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       pushToast('Client removed', 'info');
       return true;
     },
-    [getAuthenticatedUserId, pushToast]
+    [getAuthenticatedUserId, isOnline, pushToast]
   );
 
   const saveDebtSale = useCallback(
@@ -617,71 +1001,13 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       if (note?.trim()) noteParts.push(note.trim());
       const combinedNote = noteParts.length > 0 ? noteParts.join(' · ') : undefined;
 
-      if (isSupabaseConfigured && supabase) {
-        const uid = await getAuthenticatedUserId();
-        if (!uid) return false;
-
-        const rowsToInsert = [
-          ...clientIds.map((clientId, idx) => ({
-            user_id: uid,
-            client_id: clientId,
-            type: TransactionType.DEBT,
-            product_name: productName,
-            quantity,
-            split_count: splitCount,
-            amount: debtShares[idx],
-            note: combinedNote ?? null,
-            created_at: debtTime,
-          })),
-          ...(deposit > 0
-            ? clientIds
-                .map((clientId, idx) => ({
-                  user_id: uid,
-                  client_id: clientId,
-                  type: TransactionType.PAYMENT,
-                  product_name: 'Deposit',
-                  quantity: 1,
-                  split_count: splitCount,
-                  amount: depositShares[idx],
-                  note:
-                    splitCount > 1 ? `Deposit at sale (Split ${splitCount} ways)` : 'Deposit at sale',
-                  created_at: depositTime,
-                }))
-                .filter((r) => r.amount > 0)
-            : []),
-        ];
-
-        const { data: insertedTxs, error: insertError } = await supabase
-          .from('transactions')
-          .insert(rowsToInsert)
-          .select('*');
-
-        if (insertError) {
-          pushToast(`Failed to save sale: ${insertError.message}`, 'error');
-          return false;
-        }
-
-        // Refresh updated client balances computed by DB trigger
-        const { data: refreshedClients } = await supabase
-          .from('clients')
-          .select('*')
-          .eq('user_id', uid)
-          .order('name', { ascending: true });
-
-        if (insertedTxs) {
-          setTransactions((prev) => [
-            ...(insertedTxs as LedgerTransaction[]).reverse(),
-            ...prev,
-          ]);
-        }
-        if (refreshedClients) {
-          setClients(refreshedClients as Client[]);
-        }
-      } else {
-        const debtTransactions: LedgerTransaction[] = clientIds.map((clientId, idx) => ({
-          id: uuid(),
+      const debtTxs: LedgerTransaction[] = clientIds.map((clientId, idx) => {
+        const txId = uuid();
+        return {
+          id: txId,
           user_id: user.id,
           client_id: clientId,
+          client_tx_id: uuid(),
           type: TransactionType.DEBT,
           product_name: productName,
           quantity,
@@ -689,33 +1015,132 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           amount: debtShares[idx],
           note: combinedNote,
           created_at: debtTime,
-        }));
+        };
+      });
 
-        const depositTransactions: LedgerTransaction[] =
-          deposit > 0
-            ? clientIds
-                .map((clientId, idx) => ({
-                  id: uuid(),
-                  user_id: user.id,
-                  client_id: clientId,
-                  type: TransactionType.PAYMENT,
-                  product_name: 'Deposit',
-                  quantity: 1,
-                  split_count: splitCount,
-                  amount: depositShares[idx],
-                  note:
-                    splitCount > 1 ? `Deposit at sale (Split ${splitCount} ways)` : 'Deposit at sale',
-                  created_at: depositTime,
-                }))
-                .filter((t) => t.amount > 0)
-            : [];
+      const depositTxs: LedgerTransaction[] =
+        deposit > 0
+          ? clientIds
+              .map((clientId, idx) => ({
+                id: uuid(),
+                user_id: user.id,
+                client_id: clientId,
+                client_tx_id: uuid(),
+                type: TransactionType.PAYMENT,
+                product_name: 'Deposit',
+                quantity: 1,
+                split_count: splitCount,
+                amount: depositShares[idx],
+                note:
+                  splitCount > 1 ? `Deposit at sale (Split ${splitCount} ways)` : 'Deposit at sale',
+                created_at: depositTime,
+              }))
+              .filter((t) => t.amount > 0)
+          : [];
 
-        const allNew = [...depositTransactions, ...debtTransactions];
+      const allOptimistic = [...depositTxs, ...debtTxs];
+
+      const applyOptimistically = (pendingSync: boolean) => {
+        const marked = allOptimistic.map((t) => ({ ...t, pending_sync: pendingSync }));
         setTransactions((prevTx) => {
-          const nextTx = [...allNew, ...prevTx];
+          const nextTx = [...marked, ...prevTx];
           setClients((prevClients) => recomputeBalances(prevClients, nextTx));
           return nextTx;
         });
+      };
+
+      if (isSupabaseConfigured && supabase) {
+        if (!isOnline) {
+          enqueueOfflineOp({
+            id: uuid(),
+            kind: 'ADD_TRANSACTIONS',
+            payload: [...debtTxs, ...depositTxs],
+            createdAt: debtTime,
+          });
+          applyOptimistically(true);
+          triggerHaptic(18);
+          pushToast('Saved offline — will sync automatically when online', 'info');
+          return true;
+        }
+
+        const uid = await getAuthenticatedUserId();
+        if (!uid) return false;
+
+        const rowsToUpsert = [...debtTxs, ...depositTxs].map((t) => ({
+          id: t.id,
+          user_id: uid,
+          client_id: t.client_id,
+          client_tx_id: t.client_tx_id,
+          type: t.type,
+          product_name: t.product_name,
+          quantity: t.quantity,
+          split_count: t.split_count,
+          amount: t.amount,
+          note: t.note ?? null,
+          created_at: t.created_at,
+        }));
+
+        try {
+          const { data: insertedTxs, error: insertError } = await supabase
+            .from('transactions')
+            .upsert(rowsToUpsert, { onConflict: 'client_tx_id', ignoreDuplicates: true })
+            .select('*');
+
+          if (insertError) {
+            if (isNetworkFailure(insertError)) {
+              enqueueOfflineOp({
+                id: uuid(),
+                kind: 'ADD_TRANSACTIONS',
+                payload: [...debtTxs, ...depositTxs].map((t) => ({ ...t, user_id: uid })),
+                createdAt: debtTime,
+              });
+              applyOptimistically(true);
+              triggerHaptic(18);
+              pushToast('Saved offline — will sync automatically when online', 'info');
+              return true;
+            }
+            pushToast(`Failed to save sale: ${insertError.message}`, 'error');
+            return false;
+          }
+
+          const { data: refreshedClients } = await supabase
+            .from('clients')
+            .select('*')
+            .eq('user_id', uid)
+            .order('name', { ascending: true });
+
+          if (insertedTxs) {
+            setTransactions((prev) => [
+              ...(insertedTxs as LedgerTransaction[]).reverse(),
+              ...prev,
+            ]);
+          }
+          if (refreshedClients) {
+            const merged = applyOfflineQueueOptimistically(
+              refreshedClients as Client[],
+              transactionsRef.current,
+              queueRef.current
+            );
+            setClients(merged.clients);
+          }
+        } catch (err) {
+          if (isNetworkFailure(err)) {
+            enqueueOfflineOp({
+              id: uuid(),
+              kind: 'ADD_TRANSACTIONS',
+              payload: [...debtTxs, ...depositTxs].map((t) => ({ ...t, user_id: uid })),
+              createdAt: debtTime,
+            });
+            applyOptimistically(true);
+            triggerHaptic(18);
+            pushToast('Saved offline — will sync automatically when online', 'info');
+            return true;
+          }
+          pushToast('Failed to save sale', 'error');
+          return false;
+        }
+      } else {
+        applyOptimistically(false);
       }
 
       triggerHaptic(18);
@@ -747,7 +1172,7 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }
       return true;
     },
-    [clients, getAuthenticatedUserId, pushToast, settings.currency, user.id]
+    [clients, enqueueOfflineOp, getAuthenticatedUserId, isOnline, pushToast, settings.currency, user.id]
   );
 
   const recordPayment = useCallback(
@@ -763,63 +1188,117 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       if (amount <= 0) return false;
       const cleanAmount = roundCurrency(amount);
       const now = new Date().toISOString();
+      const paymentTx: LedgerTransaction = {
+        id: uuid(),
+        user_id: user.id,
+        client_id: clientId,
+        client_tx_id: uuid(),
+        type: TransactionType.PAYMENT,
+        product_name: 'Payment',
+        quantity: 1,
+        split_count: 1,
+        amount: cleanAmount,
+        note: note?.trim() || undefined,
+        created_at: now,
+      };
 
-      if (isSupabaseConfigured && supabase) {
-        const uid = await getAuthenticatedUserId();
-        if (!uid) return false;
-
-        const { data, error } = await supabase
-          .from('transactions')
-          .insert({
-            user_id: uid,
-            client_id: clientId,
-            type: TransactionType.PAYMENT,
-            product_name: 'Payment',
-            quantity: 1,
-            split_count: 1,
-            amount: cleanAmount,
-            note: note?.trim() || null,
-            created_at: now,
-          })
-          .select('*')
-          .single();
-
-        if (error || !data) {
-          pushToast(`Could not save payment: ${error?.message || 'Unknown error'}`, 'error');
-          return false;
-        }
-
-        const { data: updatedClient } = await supabase
-          .from('clients')
-          .select('*')
-          .eq('id', clientId)
-          .eq('user_id', uid)
-          .single();
-
-        setTransactions((prev) => [data as LedgerTransaction, ...prev]);
-        if (updatedClient) {
-          setClients((prev) =>
-            prev.map((c) => (c.id === clientId ? (updatedClient as Client) : c))
-          );
-        }
-      } else {
-        const paymentTx: LedgerTransaction = {
-          id: uuid(),
-          user_id: user.id,
-          client_id: clientId,
-          type: TransactionType.PAYMENT,
-          product_name: 'Payment',
-          quantity: 1,
-          split_count: 1,
-          amount: cleanAmount,
-          note: note?.trim() || undefined,
-          created_at: now,
-        };
+      const applyOptimistically = (pendingSync: boolean) => {
         setTransactions((prevTx) => {
-          const nextTx = [paymentTx, ...prevTx];
+          const nextTx = [{ ...paymentTx, pending_sync: pendingSync }, ...prevTx];
           setClients((prevClients) => recomputeBalances(prevClients, nextTx));
           return nextTx;
         });
+      };
+
+      if (isSupabaseConfigured && supabase) {
+        if (!isOnline) {
+          enqueueOfflineOp({
+            id: uuid(),
+            kind: 'ADD_TRANSACTIONS',
+            payload: [paymentTx],
+            createdAt: now,
+          });
+          applyOptimistically(true);
+          triggerHaptic(16);
+          pushToast('Saved offline — will sync automatically when online', 'info');
+          return true;
+        }
+
+        const uid = await getAuthenticatedUserId();
+        if (!uid) return false;
+
+        try {
+          const { data, error } = await supabase
+            .from('transactions')
+            .upsert(
+              {
+                id: paymentTx.id,
+                user_id: uid,
+                client_id: clientId,
+                client_tx_id: paymentTx.client_tx_id,
+                type: TransactionType.PAYMENT,
+                product_name: 'Payment',
+                quantity: 1,
+                split_count: 1,
+                amount: cleanAmount,
+                note: note?.trim() || null,
+                created_at: now,
+              },
+              { onConflict: 'client_tx_id', ignoreDuplicates: true }
+            )
+            .select('*')
+            .single();
+
+          if (error) {
+            if (isNetworkFailure(error)) {
+              enqueueOfflineOp({
+                id: uuid(),
+                kind: 'ADD_TRANSACTIONS',
+                payload: [{ ...paymentTx, user_id: uid }],
+                createdAt: now,
+              });
+              applyOptimistically(true);
+              triggerHaptic(16);
+              pushToast('Saved offline — will sync automatically when online', 'info');
+              return true;
+            }
+            pushToast(`Could not save payment: ${error.message}`, 'error');
+            return false;
+          }
+
+          const { data: updatedClient } = await supabase
+            .from('clients')
+            .select('*')
+            .eq('id', clientId)
+            .eq('user_id', uid)
+            .single();
+
+          if (data) {
+            setTransactions((prev) => [data as LedgerTransaction, ...prev]);
+          }
+          if (updatedClient) {
+            setClients((prev) =>
+              prev.map((c) => (c.id === clientId ? (updatedClient as Client) : c))
+            );
+          }
+        } catch (err) {
+          if (isNetworkFailure(err)) {
+            enqueueOfflineOp({
+              id: uuid(),
+              kind: 'ADD_TRANSACTIONS',
+              payload: [{ ...paymentTx, user_id: uid }],
+              createdAt: now,
+            });
+            applyOptimistically(true);
+            triggerHaptic(16);
+            pushToast('Saved offline — will sync automatically when online', 'info');
+            return true;
+          }
+          pushToast('Could not save payment', 'error');
+          return false;
+        }
+      } else {
+        applyOptimistically(false);
       }
 
       triggerHaptic(16);
@@ -827,7 +1306,7 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       pushToast(`Recorded ${settings.currency} ${cleanAmount} from ${clientName}`);
       return true;
     },
-    [clients, getAuthenticatedUserId, pushToast, settings.currency, user.id]
+    [clients, enqueueOfflineOp, getAuthenticatedUserId, isOnline, pushToast, settings.currency, user.id]
   );
 
   const voidTransaction = useCallback(
@@ -835,6 +1314,10 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const targetTx = transactions.find((t) => t.id === txId);
 
       if (isSupabaseConfigured && supabase) {
+        if (!isOnline) {
+          pushToast('Voiding entries requires an internet connection', 'error');
+          return false;
+        }
         const uid = await getAuthenticatedUserId();
         if (!uid) return false;
 
@@ -875,7 +1358,7 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       pushToast('Entry voided & balance recalculated', 'info');
       return true;
     },
-    [getAuthenticatedUserId, pushToast, transactions]
+    [getAuthenticatedUserId, isOnline, pushToast, transactions]
   );
 
   const upsertProduct = useCallback(
@@ -888,10 +1371,7 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         if (!uid) return false;
 
         if (product.is_default) {
-          await supabase
-            .from('products')
-            .update({ is_default: false })
-            .eq('user_id', uid);
+          await supabase.from('products').update({ is_default: false }).eq('user_id', uid);
         }
 
         if (product.id) {
@@ -1062,6 +1542,7 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       'Date',
       'Client Name',
       'WhatsApp Number',
+      'Credit Limit',
       'Type',
       'Item',
       'Quantity',
@@ -1083,6 +1564,7 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         tx.created_at,
         c?.name || 'Unknown',
         c?.whatsapp_number || '',
+        c?.credit_limit ?? 'Unlimited',
         tx.type,
         tx.product_name,
         tx.quantity,
@@ -1122,6 +1604,7 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           user_id: uid,
           name: c.name,
           whatsapp_number: c.whatsapp_number,
+          credit_limit: c.credit_limit ?? null,
           created_at: c.created_at,
         }))
       );
@@ -1135,6 +1618,7 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           id: t.id,
           user_id: uid,
           client_id: t.client_id,
+          client_tx_id: uuid(),
           type: t.type,
           product_name: t.product_name,
           quantity: t.quantity,
@@ -1149,7 +1633,7 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         return;
       }
 
-      await fetchAllFromSupabase();
+      await fetchAndHydrateFromSupabase(queueRef.current);
       pushToast('Added sample shop data to your database', 'info');
       return;
     }
@@ -1158,7 +1642,7 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setProducts(starter.products);
     setTransactions(starter.transactions);
     pushToast('Loaded sample shop data', 'info');
-  }, [fetchAllFromSupabase, getAuthenticatedUserId, pushToast]);
+  }, [fetchAndHydrateFromSupabase, getAuthenticatedUserId, pushToast]);
 
   const clearAllRecords = useCallback(async () => {
     if (isSupabaseConfigured && supabase) {
@@ -1178,7 +1662,7 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   }, [getAuthenticatedUserId, pushToast]);
 
   const logoutAndClear = useCallback(async () => {
-    // ONLY clear in-memory React state — NEVER delete database records on logout
+    // ONLY clear in-memory React state — NEVER wipe denibook_offline_queue_<userId> or DB records
     setClients([]);
     setTransactions([]);
     setProducts([]);
@@ -1192,9 +1676,10 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         products,
         transactions,
         settings,
-        pendingOpsCount: 0,
+        pendingOpsCount: offlineQueue.length,
         isOnline,
         isSyncing,
+        justSynced,
         isInitialLoading,
         isLocked,
         toasts,
@@ -1216,7 +1701,7 @@ export const DeniBookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         exportCsv,
         resetDemoData,
         clearAllRecords,
-        syncNow: fetchAllFromSupabase,
+        syncNow,
         logoutAndClear,
       }}
     >

@@ -24,10 +24,14 @@ CREATE TABLE IF NOT EXISTS public.clients (
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE DEFAULT auth.uid(),
   name TEXT NOT NULL CHECK (char_length(trim(name)) > 0),
   whatsapp_number TEXT NOT NULL CHECK (char_length(trim(whatsapp_number)) > 0),
+  credit_limit NUMERIC(12, 2) CHECK (credit_limit IS NULL OR credit_limit > 0),
   total_balance NUMERIC(12, 2) NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE public.clients
+  ADD COLUMN IF NOT EXISTS credit_limit NUMERIC(12, 2);
 
 CREATE TABLE IF NOT EXISTS public.products (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -42,6 +46,7 @@ CREATE TABLE IF NOT EXISTS public.transactions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE DEFAULT auth.uid(),
   client_id UUID NOT NULL REFERENCES public.clients(id) ON DELETE CASCADE,
+  client_tx_id UUID UNIQUE,
   type TEXT NOT NULL CHECK (type IN ('DEBT', 'PAYMENT')),
   product_name TEXT NOT NULL,
   quantity NUMERIC(10, 2) NOT NULL DEFAULT 1 CHECK (quantity > 0),
@@ -50,6 +55,18 @@ CREATE TABLE IF NOT EXISTS public.transactions (
   note TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE public.transactions
+  ADD COLUMN IF NOT EXISTS client_tx_id UUID;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'transactions_client_tx_id_key'
+  ) THEN
+    ALTER TABLE public.transactions ADD CONSTRAINT transactions_client_tx_id_key UNIQUE (client_tx_id);
+  END IF;
+END $$;
 
 -- Safe upgrade if earlier migration created owner_id instead of user_id
 DO $$

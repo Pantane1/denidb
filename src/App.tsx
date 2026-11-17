@@ -4,11 +4,11 @@ import { AddClientModal } from './components/AddClientModal';
 import { AuthScreen } from './components/AuthScreen';
 import { ClientGrid } from './components/ClientGrid';
 import { ClientProfileDrawer } from './components/ClientProfileDrawer';
-import { OfflineBanner } from './components/OfflineBanner';
 import { PinLockScreen } from './components/PinLockScreen';
 import { ProductSettings } from './components/ProductSettings';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { SummaryKPIs } from './components/SummaryKPIs';
+import { SyncStatusPill } from './components/SyncStatusPill';
 import { TapCounterBar } from './components/TapCounterBar';
 import { ToastStack } from './components/ToastStack';
 import { AuthProvider, useAuth } from './lib/auth';
@@ -110,8 +110,6 @@ const DeniBookShell: React.FC = () => {
         </div>
       </header>
 
-      <OfflineBanner />
-
       <main
         className={`max-w-7xl mx-auto px-4 sm:px-6 pt-4 sm:pt-6 ${
           selectedClients.length > 0 ? 'pb-60 sm:pb-52' : 'pb-12'
@@ -119,15 +117,18 @@ const DeniBookShell: React.FC = () => {
       >
         {activeTab === 'ledger' ? (
           <div className="space-y-5">
-            {/* Personalized Shop Dashboard Header & Account Controls */}
+            {/* Personalized Shop Dashboard Header & Sync Status Pill */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="min-w-0">
-                <h1 className="text-xl sm:text-2xl font-bold text-stone-900 dark:text-stone-50 truncate">
-                  {displayShopName}
-                </h1>
-                <p className="text-xs text-stone-500 dark:text-stone-400 truncate">
-                  Daily Credit Book · {user?.email}
-                </p>
+              <div className="min-w-0 flex flex-wrap items-center gap-2.5">
+                <div className="min-w-0">
+                  <h1 className="text-xl sm:text-2xl font-bold text-stone-900 dark:text-stone-50 truncate">
+                    {displayShopName}
+                  </h1>
+                  <p className="text-xs text-stone-500 dark:text-stone-400 truncate">
+                    Daily Credit Book · {user?.email}
+                  </p>
+                </div>
+                <SyncStatusPill />
               </div>
 
               <div className="flex items-center gap-2 shrink-0">

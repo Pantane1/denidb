@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Phone, UserPlus, X } from 'lucide-react';
+import { Phone, ShieldAlert, UserPlus, X } from 'lucide-react';
 import { Client } from '../types';
 import { formatPhoneDisplay, isValidWhatsAppNumber, sanitizeWhatsAppNumber } from '../lib/phone';
 import { useDeniBook } from '../lib/store';
@@ -10,6 +10,8 @@ interface AddClientModalProps {
   onSaved?: (client: Client) => void;
 }
 
+const LIMIT_PRESETS = [500, 1000, 2000];
+
 export const AddClientModal: React.FC<AddClientModalProps> = ({
   existingClient,
   onClose,
@@ -18,11 +20,16 @@ export const AddClientModal: React.FC<AddClientModalProps> = ({
   const { addClient, updateClient, settings } = useDeniBook();
   const [name, setName] = useState(existingClient?.name ?? '');
   const [phone, setPhone] = useState(existingClient?.whatsapp_number ?? '');
+  const [creditLimitInput, setCreditLimitInput] = useState(
+    existingClient?.credit_limit ? String(existingClient.credit_limit) : ''
+  );
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   const sanitized = sanitizeWhatsAppNumber(phone, settings.countryCode);
   const validPhone = isValidWhatsAppNumber(phone, settings.countryCode);
+
+  const parsedLimit = creditLimitInput.trim() === '' ? null : Number(creditLimitInput);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -35,14 +42,18 @@ export const AddClientModal: React.FC<AddClientModalProps> = ({
       setError('Enter a valid phone number (e.g. 0712345678).');
       return;
     }
+    if (parsedLimit !== null && (Number.isNaN(parsedLimit) || parsedLimit <= 0)) {
+      setError('Credit limit must be greater than 0, or leave blank for unlimited.');
+      return;
+    }
 
     setSubmitting(true);
     try {
       if (existingClient) {
-        const ok = await updateClient(existingClient.id, name, phone);
+        const ok = await updateClient(existingClient.id, name, phone, parsedLimit);
         if (ok) onClose();
       } else {
-        const created = await addClient(name, phone);
+        const created = await addClient(name, phone, parsedLimit);
         if (created) {
           onSaved?.(created);
           onClose();
@@ -60,7 +71,7 @@ export const AddClientModal: React.FC<AddClientModalProps> = ({
       aria-modal="true"
       aria-label={existingClient ? 'Edit Client' : 'Add New Client'}
     >
-      <div className="w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl bg-white dark:bg-[#131917] border border-stone-200 dark:border-[#222B28] p-5 sm:p-6 shadow-2xl">
+      <div className="w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl bg-white dark:bg-[#131917] border border-stone-200 dark:border-[#222B28] p-5 sm:p-6 shadow-2xl max-h-[92vh] overflow-y-auto">
         <div className="w-10 h-1.5 bg-stone-300 dark:bg-stone-700 rounded-full mx-auto mb-4 sm:hidden" />
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2.5">
@@ -136,6 +147,59 @@ export const AddClientModal: React.FC<AddClientModalProps> = ({
                 {validPhone ? '· Valid' : '· Keep typing'}
               </p>
             )}
+          </div>
+
+          <div>
+            <label
+              htmlFor="client-credit-limit"
+              className="block text-xs font-semibold text-stone-700 dark:text-stone-300"
+            >
+              Credit Limit (Optional)
+            </label>
+            <div className="relative mt-1.5">
+              <ShieldAlert className="w-4 h-4 text-stone-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                id="client-credit-limit"
+                type="number"
+                inputMode="decimal"
+                min="1"
+                step="any"
+                value={creditLimitInput}
+                onChange={(e) => {
+                  setCreditLimitInput(e.target.value);
+                  setError('');
+                }}
+                placeholder={`Unlimited (${settings.currency})`}
+                className="w-full min-h-[48px] rounded-xl border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-stone-900 pl-10 pr-3.5 text-base font-mono-num text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-teal-600"
+              />
+            </div>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {LIMIT_PRESETS.map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  onClick={() => setCreditLimitInput(String(preset))}
+                  className={`min-h-[34px] px-2.5 rounded-lg text-xs font-mono-num font-semibold border transition-colors ${
+                    creditLimitInput === String(preset)
+                      ? 'bg-teal-700 text-white border-teal-700'
+                      : 'bg-stone-100 dark:bg-stone-800 border-stone-200 dark:border-stone-700 text-stone-700 dark:text-stone-300'
+                  }`}
+                >
+                  {preset.toLocaleString()}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => setCreditLimitInput('')}
+                className={`min-h-[34px] px-2.5 rounded-lg text-xs font-semibold border transition-colors ${
+                  creditLimitInput === ''
+                    ? 'bg-stone-900 dark:bg-stone-100 text-white dark:text-stone-950 border-stone-900 dark:border-stone-100'
+                    : 'bg-stone-100 dark:bg-stone-800 border-stone-200 dark:border-stone-700 text-stone-700 dark:text-stone-300'
+                }`}
+              >
+                Unlimited
+              </button>
+            </div>
           </div>
 
           {error && (
