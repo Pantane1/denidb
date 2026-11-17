@@ -2,7 +2,7 @@
 
 **DeniBook** is a fast, mobile-first digital credit (*deni*) ledger built for shopkeepers, agrovets, kiosks, and small businesses. Log credit sales in under 3 seconds with big tap-friendly buttons, split shared bills across multiple buyers effortlessly, track partial or full repayments, and send polite, pre-filled WhatsApp payment reminders with a single tap.
 
-> **Use DeniBook Online:** Open the live web app directly in your browser or contact **Pantane Hub** at **[pantane.is-a.dev](https://pantane.is-a.dev)** for access and onboarding.
+> [**Use DeniBook Online**](https://denidb.vercel.app/)
 
 ---
 
@@ -66,6 +66,6 @@ DeniBook installs directly from your browser onto your phone's home screen so it
 
 **DeniBook** is built and maintained by **[Pantane Hub](https://pantane.is-a.dev/contact)**.
 
-- **Website & Contact:** [https://pantane.is-a.dev/contact](https://pantane.is-a.dev/contact)
+
 - **Support Email:** [pantane254@gmail.com](mailto:pantane254@gmail.com)
 - **WhatsApp Support:** [+254 740 312 402](https://wa.me/254740312402?text=Hi%20Pantane%20Hub%2C%20I%20need%20help%20with%20DeniBook.)
