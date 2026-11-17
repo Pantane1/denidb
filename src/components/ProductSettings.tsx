@@ -489,13 +489,13 @@ export const ProductSettings: React.FC<ProductSettingsProps> = ({ onOpenZReport 
           </div>
         </section>
 
-        {/* 4. Account, Cloud Sync & App Backup */}
+        {/* 4. Reports, Backups & Account */}
         <section className="rounded-2xl bg-white dark:bg-[#131917] border border-stone-200 dark:border-[#222B28] p-5 sm:p-6 space-y-4">
           <div className="flex items-center gap-2.5">
             <Cloud className="w-5 h-5 text-teal-700 dark:text-teal-400" />
             <div className="min-w-0">
               <h2 className="text-base font-bold text-stone-900 dark:text-stone-50">
-                Account &amp; Cloud Sync
+                Reports, Backups &amp; Account
               </h2>
               <p className="text-xs text-stone-500 dark:text-stone-400 truncate">
                 Signed in as {user?.email || 'Owner'} ·{' '}
@@ -504,27 +504,43 @@ export const ProductSettings: React.FC<ProductSettingsProps> = ({ onOpenZReport 
             </div>
           </div>
 
+          <div className="space-y-2">
+            <p className="text-xs font-semibold text-stone-600 dark:text-stone-300">
+              Reports &amp; Backups
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              {onOpenZReport && (
+                <button
+                  type="button"
+                  onClick={onOpenZReport}
+                  className="min-h-[44px] px-4 rounded-xl bg-[#07111F] hover:bg-[#0E1D33] text-emerald-300 text-sm font-semibold flex items-center gap-2"
+                >
+                  <FileSpreadsheet className="w-4 h-4" />
+                  <span>Daily Z-Report</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={exportCsv}
+                className="min-h-[44px] px-4 rounded-xl border border-stone-300 dark:border-stone-700 text-sm font-semibold text-stone-700 dark:text-stone-200 flex items-center gap-2 hover:bg-stone-100 dark:hover:bg-stone-800"
+              >
+                <Download className="w-4 h-4" />
+                <span>Export Full CSV</span>
+              </button>
+              {isSupabaseConfigured && (
+                <button
+                  type="button"
+                  disabled={isSyncing}
+                  onClick={syncNow}
+                  className="min-h-[44px] px-4 rounded-xl bg-teal-700 hover:bg-teal-800 disabled:opacity-50 text-white text-sm font-semibold"
+                >
+                  {isSyncing ? 'Syncing...' : 'Sync Backup Now'}
+                </button>
+              )}
+            </div>
+          </div>
+
           <div className="flex flex-wrap items-center gap-2">
-            {onOpenZReport && (
-              <button
-                type="button"
-                onClick={onOpenZReport}
-                className="min-h-[44px] px-4 rounded-xl bg-[#07111F] hover:bg-[#0E1D33] text-emerald-300 text-sm font-semibold flex items-center gap-2"
-              >
-                <FileSpreadsheet className="w-4 h-4" />
-                <span>Daily Z-Report</span>
-              </button>
-            )}
-            {isSupabaseConfigured && (
-              <button
-                type="button"
-                disabled={isSyncing}
-                onClick={syncNow}
-                className="min-h-[44px] px-4 rounded-xl bg-teal-700 hover:bg-teal-800 disabled:opacity-50 text-white text-sm font-semibold"
-              >
-                {isSyncing ? 'Syncing...' : 'Sync Backup Now'}
-              </button>
-            )}
             <button
               type="button"
               onClick={logoutAndClear}
