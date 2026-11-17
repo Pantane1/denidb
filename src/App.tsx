@@ -7,6 +7,7 @@ import { ClientProfileDrawer } from './components/ClientProfileDrawer';
 import { PinLockScreen } from './components/PinLockScreen';
 import { ProductSettings } from './components/ProductSettings';
 import { PWAInstallButton } from './components/PWAInstallButton';
+import { SetNewPasswordModal } from './components/SetNewPasswordModal';
 import { SummaryKPIs } from './components/SummaryKPIs';
 import { SyncStatusPill } from './components/SyncStatusPill';
 import { TapCounterBar } from './components/TapCounterBar';
@@ -17,7 +18,7 @@ import { DeniBookProvider, useDeniBook } from './lib/store';
 type AppTab = 'ledger' | 'settings';
 
 const DeniBookShell: React.FC = () => {
-  const { user, profile } = useAuth();
+  const { user, profile, isPasswordRecovery } = useAuth();
   const {
     clients,
     isLocked,
@@ -195,6 +196,20 @@ const DeniBookShell: React.FC = () => {
         ) : (
           <ProductSettings />
         )}
+
+        <footer className="mt-10 pt-5 border-t border-stone-200/80 dark:border-[#222B28] text-center">
+          <p className="text-xs text-stone-500 dark:text-stone-400">
+            DeniBook is a product of{' '}
+            <a
+              href="https://pantane.is-a.dev"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-semibold text-teal-700 dark:text-teal-400 hover:underline"
+            >
+              Pantane Hub
+            </a>
+          </p>
+        </footer>
       </main>
 
       {/* Tap-to-Count Action Bar (renders when 1+ clients selected) */}
@@ -223,6 +238,9 @@ const DeniBookShell: React.FC = () => {
           }}
         />
       )}
+
+      {/* Password Recovery Modal */}
+      {isPasswordRecovery && <SetNewPasswordModal />}
 
       <ToastStack />
     </div>

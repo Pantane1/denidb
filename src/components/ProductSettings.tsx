@@ -18,6 +18,7 @@ import { formatNumber } from '../lib/currency';
 import { DEFAULT_WHATSAPP_TEMPLATE } from '../lib/phone';
 import { useDeniBook } from '../lib/store';
 import { isSupabaseConfigured } from '../lib/supabase';
+import { HelpSupportSection } from './HelpSupportSection';
 import { PWAInstallButton } from './PWAInstallButton';
 
 export const ProductSettings: React.FC = () => {
@@ -483,7 +484,7 @@ export const ProductSettings: React.FC = () => {
               </h2>
               <p className="text-xs text-stone-500 dark:text-stone-400 truncate">
                 Signed in as {user?.email || 'Owner'} ·{' '}
-                {isSupabaseConfigured ? 'Supabase Cloud Sync active' : 'Local Multi-Tenant Storage'}
+                {isSupabaseConfigured ? 'Cloud Backup Active' : 'Local Preview Storage'}
               </p>
             </div>
           </div>
@@ -496,7 +497,7 @@ export const ProductSettings: React.FC = () => {
                 onClick={syncNow}
                 className="min-h-[44px] px-4 rounded-xl bg-teal-700 hover:bg-teal-800 disabled:opacity-50 text-white text-sm font-semibold"
               >
-                {isSyncing ? 'Syncing...' : 'Sync DB Now'}
+                {isSyncing ? 'Syncing...' : 'Sync Backup Now'}
               </button>
             )}
             <button
@@ -532,6 +533,9 @@ export const ProductSettings: React.FC = () => {
           </div>
         </section>
       </div>
+
+      {/* Help Guide, FAQs, Support & Legal */}
+      <HelpSupportSection />
 
       {/* Confirmation Modal */}
       {confirmAction && (

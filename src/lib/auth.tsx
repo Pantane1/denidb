@@ -24,8 +24,12 @@ interface AuthContextValue {
   profile: UserProfile | null;
   loading: boolean;
   isSupabaseMode: boolean;
+  isPasswordRecovery: boolean;
   signIn: (email: string, password: string) => Promise<AuthResult>;
   signUp: (email: string, password: string, shopName: string) => Promise<AuthResult>;
+  requestPasswordReset: (email: string) => Promise<AuthResult>;
+  completePasswordReset: (newPassword: string) => Promise<AuthResult>;
+  dismissPasswordRecovery: () => void;
   signOut: () => Promise<void>;
   updateProfile: (
     patch: Partial<Pick<UserProfile, 'shop_name' | 'currency' | 'country_code' | 'whatsapp_template'>>
@@ -48,11 +52,24 @@ function writeLocalAccounts(accounts: LocalAccountRecord[]): void {
   localStorage.setItem(LOCAL_ACCOUNTS_KEY, JSON.stringify(accounts));
 }
 
+function hasRecoveryTokenInUrl(): boolean {
+  if (typeof window === 'undefined') return false;
+  const hash = window.location.hash || '';
+  const search = window.location.search || '';
+  return (
+    hash.includes('type=recovery') ||
+    new URLSearchParams(search).get('type') === 'recovery'
+  );
+}
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState<boolean>(() =>
+    hasRecoveryTokenInUrl()
+  );
 
   const fetchSupabaseProfile = useCallback(async (uid: string, fallbackShop = 'My Shop') => {
     if (!supabase) return;
@@ -107,8 +124,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       const {
         data: { subscription },
-      } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      } = supabase.auth.onAuthStateChange((event, nextSession) => {
         if (!mounted) return;
+        if (event === 'PASSWORD_RECOVERY') {
+          setIsPasswordRecovery(true);
+        }
         setSession(nextSession);
         if (nextSession) {
           setUser({
@@ -118,6 +138,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         } else {
           setUser(null);
           setProfile(null);
+          if (event === 'SIGNED_OUT') {
+            setIsPasswordRecovery(false);
+          }
         }
         setLoading(false);
       });
@@ -250,6 +273,55 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     []
   );
 
+  const requestPasswordReset = useCallback(async (email: string): Promise<AuthResult> => {
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail) {
+      return { error: 'Enter your account email address.' };
+    }
+
+    if (isSupabaseConfigured && supabase) {
+      const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
+        redirectTo: window.location.origin,
+      });
+      if (error) {
+        return { error: error.message };
+      }
+      return {};
+    }
+
+    const accounts = readLocalAccounts();
+    if (!accounts.some((a) => a.email.toLowerCase() === cleanEmail)) {
+      return { error: 'No local preview account found with that email.' };
+    }
+    return {};
+  }, []);
+
+  const completePasswordReset = useCallback(async (newPassword: string): Promise<AuthResult> => {
+    if (newPassword.length < 6) {
+      return { error: 'Password must be at least 6 characters.' };
+    }
+
+    if (isSupabaseConfigured && supabase) {
+      const { error } = await supabase.auth.updateUser({ password: newPassword });
+      if (error) {
+        return { error: error.message };
+      }
+    }
+
+    if (typeof window !== 'undefined' && (window.location.hash || window.location.search)) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+    setIsPasswordRecovery(false);
+    return {};
+  }, []);
+
+  const dismissPasswordRecovery = useCallback(() => {
+    if (typeof window !== 'undefined' && (window.location.hash || window.location.search)) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+    setIsPasswordRecovery(false);
+  }, []);
+
   const signOut = useCallback(async () => {
     if (isSupabaseConfigured && supabase) {
       await supabase.auth.signOut();
@@ -260,6 +332,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setSession(null);
     setUser(null);
     setProfile(null);
+    setIsPasswordRecovery(false);
   }, []);
 
   const updateProfile = useCallback(
@@ -317,8 +390,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         profile,
         loading,
         isSupabaseMode: isSupabaseConfigured,
+        isPasswordRecovery,
         signIn,
         signUp,
+        requestPasswordReset,
+        completePasswordReset,
+        dismissPasswordRecovery,
         signOut,
         updateProfile,
         refreshProfile,

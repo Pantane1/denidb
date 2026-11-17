@@ -1,100 +1,71 @@
-# DeniBook — Tap-First Credit & Debt Ledger
+# DeniBook — Tap-First Digital Credit & Debt Ledger
 
-DeniBook is a fast, mobile-first web application built for shop owners and vendors to track customer credit (*deni*), split shared purchases across multiple buyers in seconds, record cash/mobile payments, and send pre-filled WhatsApp payment reminders with one tap.
+**DeniBook** is a fast, mobile-first digital credit (*deni*) ledger built for shopkeepers, agrovets, kiosks, and small businesses. Log credit sales in under 3 seconds with big tap-friendly buttons, split shared bills across multiple buyers effortlessly, track partial or full repayments, and send polite, pre-filled WhatsApp payment reminders with a single tap.
 
----
-
-## Table of Contents
-1. [Getting Started (Shop Owner Setup)](#1-getting-started-shop-owner-setup)
-2. [Daily User Manual](#2-daily-user-manual)
-   - [Adding Customers](#adding-customers)
-   - [Recording a Single-Customer Credit Sale](#recording-a-single-customer-credit-sale)
-   - [Splitting a Sale Across Multiple Customers](#splitting-a-sale-across-multiple-customers)
-   - [Recording a Payment (Partial or Full)](#recording-a-payment-partial-or-full)
-   - [Sending a One-Tap WhatsApp Reminder](#sending-a-one-tap-whatsapp-reminder)
-   - [Fixing a Mistake (Voiding an Entry)](#fixing-a-mistake-voiding-an-entry)
-   - [Managing Items & Prices](#managing-items--prices)
-3. [Installing as a Mobile App (PWA)](#3-installing-as-a-mobile-app-pwa)
-4. [Frequently Asked Questions (FAQs)](#4-frequently-asked-questions-faqs)
-5. [Developer Deployment & Architecture](#5-developer-deployment--architecture)
+> **Use DeniBook Online:** Open the live web app directly in your browser or contact **Pantane Hub** at **[pantane.is-a.dev](https://pantane.is-a.dev)** for access and onboarding.
 
 ---
 
-## 1. Getting Started (Shop Owner Setup)
+## Why This App?
 
-1. **Create Your Account:** Open the app link and switch to **Sign Up**. Enter your **Shop / Business Name**, **Email**, and **Password**.
-2. **Automatic Workspace Provisioning:** Your private ledger is isolated to your login. By default, your catalog is pre-loaded with **Fert @ 50** (editable anytime in Settings).
-3. **Multi-Device Access:** You can log in with the same email and password from your phone, tablet, or laptop—all customers, balances, and timestamps sync automatically via the cloud.
+Paper debt books slow down busy shops and cost you money:
+- **Paper gets lost, torn, wet, or misplaced**—taking weeks of customer balances with it.
+- **Mental math on shared purchases causes disputes** when two or more customers split an item or pay a partial deposit during rush hour.
+- **Chasing overdue balances manually takes too much time**, and customers forget what they took and when.
 
----
-
-## 2. Daily User Manual
-
-### Adding Customers
-1. Tap **+ Add Client** at the top of the home screen.
-2. Enter the customer's **Name** and **WhatsApp Phone Number** (e.g., `0712345678` or `+254712345678`—the app formats country codes automatically).
-3. Tap **Save**. The customer immediately appears on your main tap grid.
-
-### Recording a Single-Customer Credit Sale
-*Example: Client X takes 2 Ferts @ 50 each (Total: 100).*
-1. Tap **Client X's** card once to highlight them.
-2. On the bottom action bar, tap **Fert (+1)** twice (`2x`).
-3. Verify the total (`100`) and tap **Save Debt**.
-4. Client X's balance increases by `100` with the exact date and time logged.
-
-### Splitting a Sale Across Multiple Customers
-*Example: Client X and Client Y share 3 Ferts @ 50 each (Total: 150 → 75 each).*
-1. Tap **Client X's** card, then tap **Client Y's** card. **Split Mode** activates automatically and displays the number of selected buyers.
-2. Tap **Fert (+1)** three times (`3x`). The live preview displays: `Total: 150 → 75 each`.
-3. Tap **Save Debt**.
-4. Both Client X and Client Y have `75` added to their respective ledgers with a note indicating a 2-way split.
-
-### Recording a Payment (Partial or Full)
-1. Open the customer's profile by tapping their profile/details icon.
-2. Tap **Record Payment**.
-3. Choose a quick preset (**Full Balance**, **Half**, `50`, `100`, `200`, `500`) or type a custom amount.
-4. Tap **Save Payment**. Their outstanding balance updates immediately, and the payment is recorded in their history.
-
-### Sending a One-Tap WhatsApp Reminder
-1. Open the customer's profile (or tap the **Bell / Notify** icon on their card).
-2. Tap **Notify on WhatsApp**.
-3. DeniBook automatically calculates their current total owed and latest debt date, generates a polite reminder script, and opens WhatsApp directly to their chat with the message pre-filled.
-4. Press **Send** inside WhatsApp.
-
-### Fixing a Mistake (Voiding an Entry)
-1. Open the customer's profile and scroll to their **Transaction History**.
-2. Locate the erroneous entry and tap **Void / Delete**, then confirm.
-3. The entry is removed and the customer's total balance recalculates automatically.
-
-### Managing Items & Prices
-1. Open **Settings** (gear icon).
-2. Under **Products & Pricing**, edit the price of **Fert** or add new items you sell on credit.
-3. Customize your default **WhatsApp Reminder Message** template and **Currency** code.
+DeniBook solves every one of those headaches:
+- **3-Second Tap-to-Record Sales:** Select a customer, tap the item (`+1`), apply an optional discount or deposit, and save—zero typing friction at the counter.
+- **Automatic Split Mode:** Select two or more customers to split any purchase automatically across every buyer with exact per-person breakdowns.
+- **Per-Client Credit Limit Alerts:** Set optional credit caps per customer and get an instant, non-blocking warning before a sale pushes them over their limit.
+- **Offline Queue Sync:** Keep serving customers even when mobile data drops—sales and payments save locally and sync automatically to your cloud account as soon as signal returns.
+- **Cloud Backup Across Devices:** Log in from any phone, tablet, or laptop and pick up right where you left off with all customer balances and timestamps intact.
+- **One-Tap WhatsApp Reminders:** Launch WhatsApp pre-filled with the customer's exact balance, latest debt date, and a polite payment reminder message.
 
 ---
 
-## 3. Installing as a Mobile App (PWA)
+## How to Install on Your Phone (No App Store Needed)
 
-For the fastest one-thumb experience at the counter:
-* **Android (Chrome / Brave):** Tap the **⋮ (three dots)** menu → **Add to Home screen** / **Install app**.
-* **iPhone (Safari):** Tap the **Share** icon → **Add to Home Screen**.
+DeniBook installs directly from your browser onto your phone's home screen so it opens full-screen like a native app:
+
+### Android (Chrome / Brave)
+1. Open the live **DeniBook** website in **Chrome** or **Brave**.
+2. Tap the **⋮ (three dots)** menu in the top-right corner.
+3. Tap **Install App** or **Add to Home Screen** and confirm.
+
+### iPhone / iPad (Safari)
+1. Open the live **DeniBook** website in **Safari**.
+2. Tap the **Share** button (the square with an upward arrow at the bottom/top of the screen).
+3. Scroll down and tap **Add to Home Screen**, then tap **Add**.
 
 ---
 
-## 4. Frequently Asked Questions (FAQs)
+## Quick Start Guide (How to Use)
 
-**Q: If I log out or switch phones, will I lose my customers' debt records?**  
-**A:** No. All customers, balances, and transaction timestamps are saved securely in the cloud database under your account. Log in on any device with your email and password to access your full ledger.
+1. **Create Your Private Shop Account**
+   - Open DeniBook, choose **Create Account**, and enter your **Shop / Business Name**, **Email Address**, and **Password**.
+   - Your customer list, catalog prices, and debt ledger belong strictly to your shop login.
 
-**Q: Can another shop owner using the same website see my customers?**  
-**A:** No. Every account is protected by database-level Row Level Security (RLS). Your login can only read and modify records belonging to your user ID.
+2. **Add Your Customers**
+   - Tap **Add Client** at the top of the dashboard.
+   - Enter the customer's **Name**, **WhatsApp Phone Number** (e.g., `0712345678` or `+254712345678`), and an optional **Credit Limit** (or leave blank for unlimited).
 
-**Q: What happens if a split sale doesn't divide evenly (e.g., 100 split 3 ways)?**  
-**A:** DeniBook rounds cleanly to 2 decimal places (`33.33` each) and shows the exact per-person breakdown on the confirmation bar before you save.
+3. **Log a Single Sale or Split a Sale**
+   - **Single Customer:** Tap 1 customer card, tap your product button (`+1`, `+1`, ...), optionally add a **Discount** or **Deposit**, and tap **Save Debt**.
+   - **Split Mode (2+ Buyers):** Tap 2 or more customer cards—Split Mode activates automatically and calculates each buyer's exact share before you tap **Save Debt**.
 
-**Q: Why didn't WhatsApp open when I clicked Notify?**  
-**A:** Check that the customer's phone number is saved with valid digits (e.g., `07XXXXXXXX` or `2547XXXXXXXX`) and that WhatsApp is installed on your device (or WhatsApp Web is active on desktop).
+4. **Record Partial or Full Payments**
+   - Tap a customer's profile icon to open their ledger, then tap **Record Payment**.
+   - Pick a quick chip (**Full Balance**, **Half**, `50`, `100`, `200`, `500`) or enter any custom amount and save.
 
-**Q: Can I back up my debt book to Excel?**  
-**A:** Yes. Go to **Settings → Export CSV** to download a spreadsheet of all customers, balances, and transaction logs anytime.
+5. **Send One-Tap WhatsApp Reminders**
+   - Tap the **Notify** (bell) icon on any customer card or inside their profile to open WhatsApp directly with a ready-to-send message showing their current balance.
 
+---
+
+## About & Support
+
+**DeniBook** is built and maintained by **[Pantane Hub](https://pantane.is-a.dev/contact)**.
+
+- **Website & Contact:** [https://pantane.is-a.dev/contact](https://pantane.is-a.dev/contact)
+- **Support Email:** [pantane254@gmail.com](mailto:pantane254@gmail.com)
+- **WhatsApp Support:** [+254 740 312 402](https://wa.me/254740312402?text=Hi%20Pantane%20Hub%2C%20I%20need%20help%20with%20DeniBook.)
