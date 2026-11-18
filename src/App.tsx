@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { FileSpreadsheet, Loader2, Lock, LogOut, Moon, Sun, UserPlus } from 'lucide-react';
 import { AddClientModal } from './components/AddClientModal';
 import { AuthScreen } from './components/AuthScreen';
+import { BrandLogo } from './components/BrandLogo';
 import { ClientGrid } from './components/ClientGrid';
 import { ClientProfileDrawer } from './components/ClientProfileDrawer';
 import { PinLockScreen } from './components/PinLockScreen';
@@ -57,14 +58,8 @@ const DeniBookShell: React.FC = () => {
       {/* Compact Sticky Top Bar (56px, 3 zones) */}
       <header className="sticky top-0 z-30 h-14 bg-white/90 dark:bg-[#131917]/90 backdrop-blur-md border-b border-stone-200 dark:border-[#222B28] no-print">
         <div className="max-w-7xl mx-auto h-full px-4 sm:px-6 flex items-center justify-between gap-3 sm:gap-8">
-          {/* Zone 1: Brand Wordmark */}
-          <button
-            type="button"
-            onClick={() => setActiveTab('ledger')}
-            className="text-lg font-bold tracking-tight text-teal-800 dark:text-teal-400 whitespace-nowrap shrink-0"
-          >
-            DeniBook
-          </button>
+          {/* Zone 1: Brand Mark & Wordmark */}
+          <BrandLogo size="sm" onClick={() => setActiveTab('ledger')} />
 
           {/* Zone 2: Concise Single-Line Navigation */}
           <nav

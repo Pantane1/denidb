@@ -1,13 +1,14 @@
 import React, { useMemo, useState } from 'react';
 import {
   ArrowLeft,
-  BookOpenCheck,
+  CheckCircle2,
   Eye,
   EyeOff,
   Loader2,
   MessageCircle,
 } from 'lucide-react';
 import { useAuth } from '../lib/auth';
+import { BrandLogo } from './BrandLogo';
 
 type AuthMode = 'signin' | 'signup' | 'forgot';
 
@@ -158,25 +159,18 @@ export const AuthScreen: React.FC = () => {
 
   const subtitleText =
     mode === 'signin'
-      ? 'Welcome back! Please enter your shop details.'
+      ? 'Enter your shop credentials to manage daily sales and customer credit.'
       : mode === 'signup'
         ? 'Start tracking your shop credit & debts in seconds.'
         : 'Enter your email and we will send you a reset link.';
 
   return (
-    <div className="min-h-screen flex flex-col lg:grid lg:grid-cols-2 bg-white dark:bg-[#0E1312]">
+    <div className="min-h-dvh flex flex-col lg:grid lg:grid-cols-2 bg-white dark:bg-[#0E1312]">
       {/* Left Panel: Clean White Full-Height Auth Column */}
-      <div className="flex-1 flex flex-col justify-between px-6 py-6 sm:px-10 sm:py-8 lg:px-14 lg:py-10 bg-white dark:bg-[#0E1312]">
+      <div className="flex-1 flex flex-col justify-between gap-6 px-6 py-6 sm:px-10 sm:py-8 lg:px-14 lg:py-8 bg-white dark:bg-[#0E1312]">
         {/* Top-Left Brand Lockup */}
         <header className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-teal-700 text-white flex items-center justify-center shadow-xs shrink-0">
-              <BookOpenCheck className="w-4 h-4" />
-            </div>
-            <span className="text-base font-bold tracking-tight text-stone-900 dark:text-stone-50">
-              DeniBook
-            </span>
-          </div>
+          <BrandLogo size="md" showSubtitle />
 
           {!isSupabaseMode && (
             <span className="text-xs font-medium text-stone-500 dark:text-stone-400">
@@ -186,7 +180,7 @@ export const AuthScreen: React.FC = () => {
         </header>
 
         {/* Centered Compact Auth Form */}
-        <main className="w-full max-w-[360px] mx-auto my-auto py-10">
+        <main className="w-full max-w-[360px] mx-auto my-auto py-4 sm:py-6">
           {mode === 'forgot' && (
             <button
               type="button"
@@ -275,7 +269,7 @@ export const AuthScreen: React.FC = () => {
                     required
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder={mode === 'signup' ? 'Create a password' : '••••••••'}
+                    placeholder={mode === 'signup' ? 'Create a password' : 'Enter your password'}
                     className="w-full h-11 rounded-lg border border-stone-300 dark:border-stone-700 bg-white dark:bg-[#141A18] pl-3.5 pr-11 text-sm text-stone-900 dark:text-stone-100 placeholder:text-stone-400 focus:outline-none focus:border-teal-700 focus:ring-4 focus:ring-teal-700/10 dark:focus:border-teal-500 dark:focus:ring-teal-500/15 transition-all"
                   />
                   <button
@@ -357,7 +351,7 @@ export const AuthScreen: React.FC = () => {
 
           {/* Compact Mode Switcher Footer Link */}
           {mode !== 'forgot' && (
-            <p className="mt-6 text-center text-xs sm:text-sm text-stone-500 dark:text-stone-400">
+            <p className="mt-5 text-center text-xs sm:text-sm text-stone-500 dark:text-stone-400">
               {mode === 'signin' ? (
                 <>
                   Don&apos;t have an account?{' '}
@@ -383,19 +377,35 @@ export const AuthScreen: React.FC = () => {
               )}
             </p>
           )}
+
+          {/* Subtle Compact Feature Strip (Mobile & Tablet only) */}
+          <p className="lg:hidden mt-5 pt-4 border-t border-stone-100 dark:border-[#1E2724] text-center text-[11px] font-medium text-stone-500 dark:text-stone-400 leading-relaxed">
+            <span>Offline-ready</span>
+            <span className="mx-1.5 text-stone-300 dark:text-stone-600" aria-hidden="true">
+              ·
+            </span>
+            <span>Split Credit Tracking</span>
+            <span className="mx-1.5 text-stone-300 dark:text-stone-600" aria-hidden="true">
+              ·
+            </span>
+            <span>WhatsApp Reminders</span>
+          </p>
         </main>
 
         {/* Bottom-Left Minimal Attribution Footer */}
-        <footer className="flex flex-wrap items-center justify-between gap-2 text-xs text-stone-400 dark:text-stone-500">
-          <span>
-            &copy; {new Date().getFullYear()}{' '}
+        <footer className="flex flex-wrap items-center justify-between gap-3 text-xs text-stone-400 dark:text-stone-500">
+          <span className="inline-flex items-center">
+            &copy; {new Date().getFullYear()} DeniBook
+            <span className="mx-2 text-stone-300 dark:text-stone-600" aria-hidden="true">
+              ·
+            </span>
             <a
               href="https://pantane.is-a.dev"
               target="_blank"
               rel="noopener noreferrer"
-              className="hover:text-stone-700 dark:hover:text-stone-300 transition-colors"
+              className="font-medium hover:text-stone-700 dark:hover:text-stone-300 transition-colors"
             >
-              DeniBook · Pantane Hub
+              Pantane Hub
             </a>
           </span>
 
@@ -411,23 +421,98 @@ export const AuthScreen: React.FC = () => {
         </footer>
       </div>
 
-      {/* Right Panel: Soft Lavender Canvas with Pure CSS 3D Horizon Sphere */}
+      {/* Right Panel: Dark Navy & Emerald/Cyan Digital Ledger Preview */}
       <aside
         aria-hidden="true"
-        className="hidden lg:flex group relative items-center justify-center overflow-hidden bg-[#F4F3F8] dark:bg-[#13141E]"
+        className="hidden lg:flex relative flex-col items-center justify-center overflow-hidden bg-[#07111F] px-10 py-12 xl:px-14"
       >
-        {/* Subtle Ambient Lavender Glow */}
-        <div className="pointer-events-none absolute w-[460px] h-[460px] rounded-full bg-gradient-to-tr from-[#C4B5FD]/35 via-[#A78BFA]/20 to-[#5EEAD4]/20 blur-3xl" />
+        {/* Subtle Radial Emerald & Cyan Atmospheric Glows */}
+        <div className="pointer-events-none absolute -top-24 -right-24 w-[420px] h-[420px] rounded-full bg-[#00B4FF]/14 blur-3xl" />
+        <div className="pointer-events-none absolute -bottom-24 -left-24 w-[420px] h-[420px] rounded-full bg-[#10B981]/16 blur-3xl" />
 
-        {/* Pure CSS 3D Gradient Sphere */}
-        <div className="relative flex items-center justify-center w-full h-full">
-          <div className="relative w-60 h-60 xl:w-64 xl:h-64 rounded-full bg-gradient-to-br from-[#7C3AED] via-[#5B21B6] to-[#0F766E] shadow-[0_24px_60px_-15px_rgba(91,33,182,0.45)] transition-transform duration-500 ease-out group-hover:scale-[1.03]">
-            {/* Subtle specular rim highlight */}
-            <div className="absolute inset-0 rounded-full bg-gradient-to-t from-transparent via-white/5 to-white/25" />
+        <div className="relative w-full max-w-[440px] space-y-6">
+          {/* Clean Ledger UI Preview Card */}
+          <div className="rounded-2xl bg-[#0D1A2E]/95 border border-white/10 shadow-[0_24px_64px_-16px_rgba(0,0,0,0.65)] overflow-hidden">
+            {/* Preview Top Bar */}
+            <div className="px-5 py-4 border-b border-white/10 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-sm font-bold text-white truncate">Kamau Agrovet</p>
+                <p className="text-xs text-slate-400">Today&apos;s Sales &amp; Credit Book</p>
+              </div>
+              <span className="text-[11px] font-semibold text-[#00B4FF] whitespace-nowrap">
+                Cloud Synced
+              </span>
+            </div>
+
+            {/* Daily Sales KPI Strip */}
+            <div className="grid grid-cols-2 divide-x divide-white/10 border-b border-white/10">
+              <div className="px-5 py-4">
+                <p className="text-[11px] font-medium text-slate-400">Added Today</p>
+                <p className="mt-1 font-mono-num text-xl font-bold text-white">KES 4,250</p>
+                <p className="mt-0.5 text-[11px] text-slate-400">12 credit sales</p>
+              </div>
+              <div className="px-5 py-4">
+                <p className="text-[11px] font-medium text-slate-400">Collected Today</p>
+                <p className="mt-1 font-mono-num text-xl font-bold text-[#10B981]">KES 2,800</p>
+                <p className="mt-0.5 text-[11px] text-slate-400">Cash &amp; M-Pesa</p>
+              </div>
+            </div>
+
+            {/* Tracked Customer Balances */}
+            <div className="divide-y divide-white/8">
+              <div className="px-5 py-3.5 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-white truncate">Wanjiku Kamau</p>
+                  <p className="text-xs text-slate-400 truncate">3x Fert · Split 2 ways</p>
+                </div>
+                <span className="font-mono-num text-sm font-bold text-amber-300 whitespace-nowrap">
+                  KES 450
+                </span>
+              </div>
+
+              <div className="px-5 py-3.5 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-white truncate">Brian Ochieng</p>
+                  <p className="text-xs text-slate-400 truncate">2x Seeds Pack</p>
+                </div>
+                <span className="font-mono-num text-sm font-bold text-[#00B4FF] whitespace-nowrap">
+                  KES 720
+                </span>
+              </div>
+
+              <div className="px-5 py-3.5 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-white truncate">Grace Mutua</p>
+                  <p className="text-xs text-slate-400 truncate">Paid via M-Pesa</p>
+                </div>
+                <span className="inline-flex items-center gap-1 text-xs font-semibold text-[#10B981] whitespace-nowrap">
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>Settled</span>
+                </span>
+              </div>
+            </div>
+
+            {/* One-Tap WhatsApp Reminder Footer */}
+            <div className="px-5 py-3.5 bg-[#091425] border-t border-white/10 flex items-center justify-between gap-3">
+              <span className="text-xs text-slate-300 truncate">
+                Pre-filled balance &amp; items
+              </span>
+              <span className="inline-flex items-center gap-1.5 rounded-lg bg-[#10B981]/15 border border-[#10B981]/35 px-3 py-1.5 text-xs font-semibold text-[#34D399] whitespace-nowrap shrink-0">
+                <MessageCircle className="w-3.5 h-3.5" />
+                <span>WhatsApp Reminder</span>
+              </span>
+            </div>
           </div>
 
-          {/* Frosted Glass Horizon Reflection Shelf (Lower Hemisphere Diffusion) */}
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 top-1/2 bg-[#F4F3F8]/60 dark:bg-[#13141E]/65 backdrop-blur-2xl border-t border-white/60 dark:border-white/10" />
+          {/* Concise Value Caption */}
+          <div className="space-y-2 text-left">
+            <h2 className="text-xl font-bold tracking-tight text-white">
+              Ditch the paper debt book.
+            </h2>
+            <p className="text-sm leading-relaxed text-slate-300">
+              Log credit sales in 3 taps, track Cash &amp; M-Pesa collections, and reconcile every shilling at closing.
+            </p>
+          </div>
         </div>
       </aside>
     </div>
